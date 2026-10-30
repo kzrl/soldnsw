@@ -1,0 +1,96 @@
+/* SoldNSW Custom Styling */
+
+:root {
+    --primary-color: #00d1b2;
+    --primary-dark: #00a78e;
+}
+
+body {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+main {
+    flex: 1 0 auto;
+}
+
+.hero-search-bg {
+    background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+    position: relative;
+}
+
+.shadow-sm {
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.07), 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+}
+
+.shadow-md {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -1px rgba(0, 0, 0, 0.04);
+}
+
+.shadow-lg {
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+.table th {
+    font-size: 0.825rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6b7280;
+}
+
+.table td {
+    vertical-align: middle;
+}
+
+.tag.is-family-monospace {
+    letter-spacing: -0.025em;
+}
+
+.card {
+    border-radius: 6px;
+    border: 1px solid #e5e7eb;
+}
+
+.leaflet-container {
+    font-family: inherit;
+}
+
+/* Address autocomplete */
+.address-suggestions {
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #ffffff;
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: -0.5rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+
+.address-suggestion {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.65rem 0.85rem;
+    border: 0;
+    border-bottom: 1px solid #f3f4f6;
+    background: #ffffff;
+    color: #1f2937;
+    text-align: left;
+    cursor: pointer;
+}
+
+.address-suggestion:last-child {
+    border-bottom: 0;
+}
+
+.address-suggestion:hover,
+.address-suggestion.is-active {
+    background: #ecfdf9;
+}
+
+.address-suggestion .icon {
+    color: #00a78e;
+}

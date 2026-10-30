@@ -1,0 +1,27 @@
+# Compiled binaries
+/bin/
+/server
+/import_nsw
+/downloader
+/ingest
+
+# SQLite database files (large, generated)
+properties.db
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Downloaded bulk datasets
+/data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

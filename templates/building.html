@@ -1,0 +1,100 @@
+{{define "title"}}{{.BuildingAddress}} - Units - SoldNSW{{end}}
+
+{{define "content"}}
+<section class="section py-5">
+    <div class="container">
+        <nav class="breadcrumb has-succeeds-separator is-small mb-4" aria-label="breadcrumbs">
+            <ul>
+                <li><a href="/"><i class="fa-solid fa-house mr-1"></i> Home</a></li>
+                <li><a href="/suburbs?suburb={{.BuildingSuburb}}&state={{.BuildingState}}">Suburb trends</a></li>
+                <li class="is-active"><a href="#" aria-current="page">{{.BuildingAddress}}</a></li>
+            </ul>
+        </nav>
+
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <span class="tag is-info is-light mb-2">
+                        <i class="fa-solid fa-building mr-1"></i> Building / strata records
+                    </span>
+                    <h1 class="title is-3 mb-1">{{.BuildingAddress}}</h1>
+                    <p class="subtitle is-6 has-text-grey">
+                        {{.BuildingUnitCount}} property records &bull; {{.BuildingSalesCount}} recorded sales
+                    </p>
+                    <p class="is-size-7 has-text-grey">
+                        Building ID: <span class="is-family-monospace">{{.BuildingBasePID}}</span>
+                    </p>
+                </div>
+            </div>
+            <div class="level-right">
+                <a href="/" class="button is-small is-light">
+                    <span class="icon"><i class="fa-solid fa-arrow-left"></i></span>
+                    <span>Back to search</span>
+                </a>
+            </div>
+        </div>
+
+        <div class="notification is-info is-light is-size-7">
+            This PSI ID represents a building/strata plan. Individual units have their own property IDs and sale histories below.
+        </div>
+
+        <div class="card shadow-sm">
+            <header class="card-header has-background-white-ter">
+                <p class="card-header-title">
+                    <i class="fa-solid fa-list mr-2 has-text-primary"></i> Units and properties in this building
+                </p>
+            </header>
+            <div class="card-content p-0">
+                <div class="table-container mb-0">
+                    <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                        <thead>
+                            <tr class="has-background-light">
+                                <th scope="col">Unit / address</th>
+                                <th scope="col">Lot / plan</th>
+                                <th scope="col">Type</th>
+                                <th scope="col">Land area</th>
+                                <th scope="col">Latest sale</th>
+                                <th scope="col">Sales</th>
+                                <th scope="col" class="has-text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .BuildingUnits}}
+                            <tr>
+                                <td>
+                                    <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
+                                        {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
+                                    </a>
+                                    {{if eq .GnafPid $.BuildingBasePID}}
+                                    <span class="tag is-warning is-light is-small ml-1">building record</span>
+                                    {{end}}
+                                </td>
+                                <td>
+                                    {{if .LotNumber.Valid}}{{.LotNumber.String}}{{else}}—{{end}}
+                                    /
+                                    {{if .PlanNumber.Valid}}{{.PlanNumber.String}}{{else}}—{{end}}
+                                </td>
+                                <td>{{if .PropertyType.Valid}}{{.PropertyType.String}}{{else}}—{{end}}</td>
+                                <td>{{if .LandArea.Valid}}{{formatArea .LandArea.Float64}}{{else}}—{{end}}</td>
+                                <td>
+                                    {{if .LatestSaleDate}}
+                                    {{formatDate .LatestSaleDate}}<br>
+                                    <span class="has-text-weight-bold has-text-success">${{formatPrice .LatestSalePrice}}</span>
+                                    {{else}}
+                                    <span class="has-text-grey-light">—</span>
+                                    {{end}}
+                                </td>
+                                <td>{{.SalesCount}}</td>
+                                <td class="has-text-right">
+                                    <a href="/property/{{.GnafPid}}" class="button is-small is-primary is-light">View sales</a>
+                                </td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{{end}}

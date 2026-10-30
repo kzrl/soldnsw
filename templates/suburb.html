@@ -1,0 +1,416 @@
+{{define "title"}}Suburb Market Trends - {{if .SelectedSuburb}}{{.SelectedSuburb}}, {{.SelectedState}}{{else}}SoldNSW{{end}}{{end}}
+
+{{define "head"}}
+{{if .Analytics}}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>{{end}}
+{{end}}
+
+{{define "content"}}
+<section class="section py-5">
+    <div class="container">
+        <!-- Suburb Selector & Header -->
+        <div class="columns is-vcentered mb-4">
+            <div class="column is-7">
+                <h1 class="title is-3 mb-1">
+                    <i class="fa-solid fa-chart-line has-text-primary mr-2"></i>
+                    {{if .SelectedSuburb}}
+                        {{.SelectedSuburb}}, {{.SelectedState}} market trends
+                    {{else}}
+                        Suburb market trends
+                    {{end}}
+                </h1>
+                <p class="subtitle is-6 has-text-grey">
+                    Compare recorded sale prices and sales volumes across suburbs.
+                </p>
+            </div>
+            <div class="column is-5">
+                <form action="/suburbs" method="GET">
+                    <div class="field has-addons mb-1">
+                        <div class="control is-expanded has-icons-left">
+                            <input class="input" type="text" name="suburb" placeholder="Suburb, e.g. SURRY HILLS" value="{{.SelectedSuburb}}" autocomplete="off" required aria-label="Suburb">
+                            <span class="icon is-small is-left">
+                                <i class="fa-solid fa-location-dot"></i>
+                            </span>
+                        </div>
+                        <div class="control">
+                            <div class="select">
+                                <select name="state" aria-label="State">
+                                    <option value="" {{if eq .SelectedState ""}}selected{{end}}>Auto state</option>
+                                    <option value="NSW" {{if eq .SelectedState "NSW"}}selected{{end}}>NSW</option>
+                                    <option value="VIC" {{if eq .SelectedState "VIC"}}selected{{end}}>VIC</option>
+                                    <option value="QLD" {{if eq .SelectedState "QLD"}}selected{{end}}>QLD</option>
+                                    <option value="WA" {{if eq .SelectedState "WA"}}selected{{end}}>WA</option>
+                                    <option value="SA" {{if eq .SelectedState "SA"}}selected{{end}}>SA</option>
+                                    <option value="TAS" {{if eq .SelectedState "TAS"}}selected{{end}}>TAS</option>
+                                    <option value="ACT" {{if eq .SelectedState "ACT"}}selected{{end}}>ACT</option>
+                                    <option value="NT" {{if eq .SelectedState "NT"}}selected{{end}}>NT</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="control">
+                            <button type="submit" class="button is-primary">Show trends</button>
+                        </div>
+                    </div>
+                    <p class="help has-text-grey">Choose a state when the suburb name exists in more than one state.</p>
+                </form>
+            </div>
+        </div>
+
+        {{if .Analytics}}
+            <div class="level is-mobile mb-3">
+                <div class="level-left">
+                    <div>
+                        <p class="heading has-text-grey mb-0">Price statistics range</p>
+                        <p class="is-size-7 has-text-grey">Median, average, highest and lowest sales</p>
+                    </div>
+                </div>
+                <div class="level-right">
+                    <div class="buttons has-addons mb-0">
+                        <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&price_range=1&range={{.ChartRange}}" class="button is-small {{if eq .PriceRange "1"}}is-primary{{else}}is-light{{end}}">1 year</a>
+                        <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&price_range=5&range={{.ChartRange}}" class="button is-small {{if eq .PriceRange "5"}}is-primary{{else}}is-light{{end}}">5 years</a>
+                        <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&price_range=10&range={{.ChartRange}}" class="button is-small {{if eq .PriceRange "10"}}is-primary{{else}}is-light{{end}}">10 years</a>
+                        <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&price_range=all&range={{.ChartRange}}" class="button is-small {{if eq .PriceRange "all"}}is-primary{{else}}is-light{{end}}">All time</a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- KPI Stat Cards -->
+            <div class="columns is-multiline mb-5">
+                <div class="column is-6-mobile is-3-tablet">
+                    <div class="card p-4 has-background-primary-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                        <p class="heading has-text-grey-dark"><i class="fa-solid fa-calculator mr-1"></i> Median sale price</p>
+                        <p class="title is-3 has-text-primary mb-0">${{formatPrice .Analytics.MedianPrice}}</p>
+                        <p class="is-size-7 has-text-grey mt-1">{{.PriceLabel}} &bull; {{.Analytics.TotalSales}} sales</p>
+                        <p class="is-size-7 has-text-grey mt-1">Average: ${{formatPrice .Analytics.AvgPrice}}</p>
+                        {{if .PriceNote}}<p class="is-size-7 has-text-warning-dark mt-1">{{.PriceNote}}</p>{{end}}
+                    </div>
+                </div>
+                <div class="column is-6-mobile is-3-tablet">
+                    <div class="card p-4 has-background-success-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                        <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-up mr-1"></i> Highest recorded sale</p>
+                        <p class="title is-3 has-text-success mb-0">${{formatPrice .Analytics.MaxPrice}}</p>
+                        {{if .MaxSale}}
+                        <a href="/property/{{.MaxSale.GnafPid}}" class="is-size-7 has-text-grey mt-1">
+                            {{formatDate .MaxSale.SettlementDate}} &bull; {{if and .MaxSale.StreetNumber.Valid .MaxSale.StreetNumber.String}}{{.MaxSale.StreetNumber.String}} {{end}}{{.MaxSale.StreetName}} {{.MaxSale.StreetType}}
+                        </a>
+                        {{else}}
+                        <p class="is-size-7 has-text-grey mt-1">{{.PriceLabel}}</p>
+                        {{end}}
+                    </div>
+                </div>
+                <div class="column is-6-mobile is-3-tablet">
+                    <div class="card p-4 has-background-info-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                        <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-down mr-1"></i> Lowest recorded sale</p>
+                        <p class="title is-3 has-text-info mb-0">${{formatPrice .Analytics.MinPrice}}</p>
+                        {{if .MinSale}}
+                        <a href="/property/{{.MinSale.GnafPid}}" class="is-size-7 has-text-grey mt-1">
+                            {{formatDate .MinSale.SettlementDate}} &bull; {{if and .MinSale.StreetNumber.Valid .MinSale.StreetNumber.String}}{{.MinSale.StreetNumber.String}} {{end}}{{.MinSale.StreetName}} {{.MinSale.StreetType}}
+                        </a>
+                        {{else}}
+                        <p class="is-size-7 has-text-grey mt-1">{{.PriceLabel}}</p>
+                        {{end}}
+                    </div>
+                </div>
+                <div class="column is-6-mobile is-3-tablet">
+                    <div class="card p-4 has-background-warning-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                        <p class="heading has-text-grey-dark"><i class="fa-solid fa-receipt mr-1"></i> Sales recorded</p>
+                        <p class="title is-3 has-text-dark mb-0">{{.Analytics.TotalSales}}</p>
+                        <p class="is-size-7 has-text-grey mt-1">{{.PriceLabel}}</p>
+                    </div>
+                </div>
+            </div>
+
+            <p class="is-size-7 has-text-grey mb-5">
+                <i class="fa-solid fa-circle-info mr-1"></i>
+                Median is the typical-price measure. Highest and lowest sales include all property types, so large land or commercial transactions can appear.
+            </p>
+
+            {{if .LossSummary}}
+            <div class="notification is-danger is-light mb-5">
+                <div class="level is-mobile mb-0">
+                    <div class="level-left">
+                        <div>
+                            <p class="has-text-weight-bold">
+                                <i class="fa-solid fa-arrow-trend-down mr-1"></i>
+                                {{.LossSummary.Losses}} of {{.LossSummary.Resales}} resales sold at a loss over the last 2 years
+                                ({{printf "%.1f%%" .LossRate}})
+                            </p>
+                            <p class="is-size-7 has-text-grey">Latest recorded sale below the previous recorded sale. Nominal values.</p>
+                        </div>
+                    </div>
+                    <div class="level-right">
+                        <a href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=2&sort=amount" class="button is-small is-danger is-outlined">
+                            View loss-making sales
+                        </a>
+                    </div>
+                </div>
+            </div>
+            {{end}}
+
+            <!-- Chart & Summary -->
+            <div class="columns mb-5">
+                <div class="column is-7">
+                    <div class="card shadow-sm">
+                        <header class="card-header has-background-white-ter">
+                            <p class="card-header-title">
+                                <i class="fa-solid fa-chart-column mr-2 has-text-primary"></i> Monthly average sale price
+                            </p>
+                        </header>
+                        <div class="card-content">
+                            <div class="buttons are-small mb-3">
+                                <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=5" class="button {{if eq .ChartRange "5"}}is-primary{{else}}is-light{{end}}">5 years</a>
+                                <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=10" class="button {{if eq .ChartRange "10"}}is-primary{{else}}is-light{{end}}">10 years</a>
+                                <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=all" class="button {{if eq .ChartRange "all"}}is-primary{{else}}is-light{{end}}">All</a>
+                            </div>
+                            {{if .ChartLabels}}
+                            <canvas id="suburbChart" style="max-height: 280px;"></canvas>
+                            {{else}}
+                            <p class="has-text-grey has-text-centered py-5">No sales recorded in this period.</p>
+                            {{end}}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="column is-5">
+                    <div class="card shadow-sm">
+                        <header class="card-header has-background-white-ter">
+                            <p class="card-header-title">
+                                <i class="fa-solid fa-circle-info mr-2 has-text-info"></i> Suburb summary
+                            </p>
+                        </header>
+                        <div class="card-content">
+                            <table class="table is-fullwidth is-narrow mb-4">
+                                <tbody>
+                                    <tr><td><strong>Suburb</strong></td><td class="has-text-right">{{.SelectedSuburb}}</td></tr>
+                                    <tr><td><strong>State</strong></td><td class="has-text-right"><span class="tag is-dark is-light">{{.SelectedState}}</span></td></tr>
+                                    <tr><td><strong>Average sale</strong></td><td class="has-text-right has-text-weight-bold has-text-primary">${{formatPrice .Analytics.AvgPrice}}</td></tr>
+                                    <tr><td><strong>Highest sale</strong></td><td class="has-text-right has-text-success">${{formatPrice .Analytics.MaxPrice}}</td></tr>
+                                    <tr><td><strong>Lowest sale</strong></td><td class="has-text-right has-text-info">${{formatPrice .Analytics.MinPrice}}</td></tr>
+                                    <tr><td><strong>Sales recorded</strong></td><td class="has-text-right has-text-weight-bold">{{.Analytics.TotalSales}}</td></tr>
+                                </tbody>
+                            </table>
+
+                            <div class="buttons">
+                                <a href="/properties?suburb={{.SelectedSuburb}}&state={{.SelectedState}}" class="button is-primary is-fullwidth">
+                                    <span class="icon"><i class="fa-solid fa-list"></i></span>
+                                    <span>View properties in {{.SelectedSuburb}}</span>
+                                </a>
+                                <a href="/submit" class="button is-light is-fullwidth">
+                                    <span class="icon"><i class="fa-solid fa-plus"></i></span>
+                                    <span>Add a sale</span>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Suburb Sales Records -->
+            <div class="card shadow-sm">
+                <header class="card-header has-background-white-ter">
+                    <p class="card-header-title">
+                        <i class="fa-solid fa-list-check mr-2 has-text-primary"></i> Recorded sales in {{.SelectedSuburb}}
+                    </p>
+                </header>
+                <div class="card-content p-0">
+                    {{if .SuburbSales}}
+                    <div class="table-container mb-0">
+                        <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                            <thead>
+                                <tr class="has-background-light">
+                                    <th scope="col">Date</th>
+                                    <th scope="col">Address</th>
+                                    <th scope="col">Sale price</th>
+                                    <th scope="col">Source</th>
+                                    <th scope="col" class="has-text-right">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{range .SuburbSales}}
+                                <tr>
+                                    <td>{{formatDate .SettlementDate}}</td>
+                                    <td>
+                                        <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
+                                            {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
+                                        </a>
+                                    </td>
+                                    <td class="has-text-weight-bold has-text-success">${{formatPrice .SalePrice}}</td>
+                                    <td><span class="tag is-small is-light">{{if eq .SourceType "NSW Valuer General (PSI)"}}Valuer General{{else}}{{.SourceType}}{{end}}</span></td>
+                                    <td class="has-text-right">
+                                        <a href="/property/{{.GnafPid}}" class="button is-small is-light is-primary">View sales</a>
+                                    </td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{else}}
+                    <div class="p-5 has-text-centered has-text-grey">No recorded sales for this suburb yet.</div>
+                    {{end}}
+                </div>
+                {{if .SuburbSalesTotal}}
+                <footer class="card-footer">
+                    <div class="card-footer-item is-size-7 has-text-grey">
+                        Showing {{.ShowingFrom}}–{{.ShowingTo}} of {{.SuburbSalesTotal}} sales
+                    </div>
+                    <div class="card-footer-item">
+                        <div class="buttons has-addons mb-0">
+                            {{if .HasPrev}}
+                            <a class="button is-small is-light" href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.ChartRange}}&page={{.PrevPage}}">
+                                <span class="icon is-small"><i class="fa-solid fa-chevron-left"></i></span><span>Previous</span>
+                            </a>
+                            {{else}}
+                            <button class="button is-small is-light" disabled>Previous</button>
+                            {{end}}
+                            {{if .HasNext}}
+                            <a class="button is-small is-light" href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.ChartRange}}&page={{.NextPage}}">
+                                <span>Next</span><span class="icon is-small"><i class="fa-solid fa-chevron-right"></i></span>
+                            </a>
+                            {{else}}
+                            <button class="button is-small is-light" disabled>Next</button>
+                            {{end}}
+                        </div>
+                    </div>
+                </footer>
+                {{end}}
+            </div>
+
+        {{else if .SelectedSuburb}}
+            <div class="notification is-warning is-light">
+                <p><strong>No data for {{.SelectedSuburb}}{{if .SelectedState}}, {{.SelectedState}}{{end}}.</strong></p>
+                <p class="is-size-7 mt-1">Check the suburb name or choose a state.</p>
+            </div>
+
+        {{else}}
+            <!-- Suburb Overview -->
+            <div class="card shadow-sm">
+                <header class="card-header has-background-white-ter">
+                    <p class="card-header-title">
+                        <i class="fa-solid fa-table-list mr-2 has-text-primary"></i> Suburbs by recorded sales
+                    </p>
+                </header>
+                <div class="card-content p-0">
+                    {{if gt .OverviewTotal (len .OverviewStats)}}
+                    <p class="is-size-7 has-text-grey p-4 pb-0">Showing the top {{len .OverviewStats}} of {{.OverviewTotal}} suburbs. Choose a suburb above for full trends. Price changes compare the latest 12-month average with the 12 months ending 1, 5 or 10 years ago.</p>
+                    {{end}}
+                    {{if .OverviewStats}}
+                    <div class="table-container mb-0">
+                        <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                            <thead>
+                                <tr class="has-background-light">
+                                    <th scope="col">Suburb</th>
+                                    <th scope="col">State</th>
+                                    <th scope="col">Sales</th>
+                                    <th scope="col">Average sale price</th>
+                                    <th scope="col" title="Latest 12-month average vs the previous 12 months">1y change</th>
+                                    <th scope="col" title="Latest 12-month average vs the 12 months ending 5 years ago">5y change</th>
+                                    <th scope="col" title="Latest 12-month average vs the 12 months ending 10 years ago">10y change</th>
+                                    <th scope="col" class="has-text-right">Trends</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {{range .OverviewStats}}
+                                <tr>
+                                    <td><strong>{{.Suburb}}</strong></td>
+                                    <td><span class="tag is-dark is-light">{{.State}}</span></td>
+                                    <td>{{.SalesCount}}</td>
+                                    <td>
+                                        {{if gt .SalesCount 0}}
+                                        <span class="has-text-weight-bold has-text-primary">${{formatPrice .AvgPrice}}</span>
+                                        {{else}}
+                                        <span class="has-text-grey-light">—</span>
+                                        {{end}}
+                                    </td>
+                                    <td>
+                                        {{if .Change1y.Valid}}
+                                        <span class="{{if lt .Change1y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change1y.Float64}}</span>
+                                        {{else}}
+                                        <span class="has-text-grey-light">—</span>
+                                        {{end}}
+                                    </td>
+                                    <td>
+                                        {{if .Change5y.Valid}}
+                                        <span class="{{if lt .Change5y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change5y.Float64}}</span>
+                                        {{else}}
+                                        <span class="has-text-grey-light">—</span>
+                                        {{end}}
+                                    </td>
+                                    <td>
+                                        {{if .Change10y.Valid}}
+                                        <span class="{{if lt .Change10y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change10y.Float64}}</span>
+                                        {{else}}
+                                        <span class="has-text-grey-light">—</span>
+                                        {{end}}
+                                    </td>
+                                    <td class="has-text-right">
+                                        <a href="/suburbs?suburb={{.Suburb}}&state={{.State}}" class="button is-small is-primary is-outlined">View trends</a>
+                                    </td>
+                                </tr>
+                                {{end}}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{else}}
+                    <div class="notification is-info is-light m-4">
+                        Suburb statistics are being calculated for the first time. Refresh this page in a moment.
+                    </div>
+                    {{end}}
+                </div>
+            </div>
+        {{end}}
+    </div>
+</section>
+
+{{if and .Analytics .ChartLabels}}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const ctx = document.getElementById('suburbChart');
+    if (!ctx) return;
+
+    const labels = [{{range $i, $l := .ChartLabels}}{{if $i}},{{end}}"{{$l}}"{{end}}];
+    const data = [{{range $i, $v := .ChartValues}}{{if $i}},{{end}}{{$v}}{{end}}];
+
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Monthly average sale price (AUD)',
+                data: data,
+                borderColor: '#00d1b2',
+                backgroundColor: 'rgba(0, 209, 178, 0.15)',
+                borderWidth: 2.5,
+                fill: true,
+                tension: 0.3,
+                pointBackgroundColor: '#00d1b2',
+                pointRadius: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return 'Average: $' + Number(context.parsed.y).toLocaleString('en-AU');
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: false,
+                    ticks: {
+                        callback: function(value) {
+                            return '$' + (value / 1000).toLocaleString() + 'k';
+                        }
+                    }
+                }
+            }
+        }
+    });
+});
+</script>
+{{end}}
+{{end}}

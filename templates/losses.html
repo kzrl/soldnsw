@@ -1,0 +1,198 @@
+{{define "title"}}Properties Sold at a Loss - {{.SelectedSuburb}}{{if .SelectedState}}, {{.SelectedState}}{{end}} - SoldNSW{{end}}
+
+{{define "content"}}
+<section class="section py-5">
+    <div class="container">
+        <nav class="breadcrumb has-succeeds-separator is-small mb-4" aria-label="breadcrumbs">
+            <ul>
+                <li><a href="/"><i class="fa-solid fa-house mr-1"></i> Home</a></li>
+                <li><a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}">{{.SelectedSuburb}}{{if .SelectedState}}, {{.SelectedState}}{{end}}</a></li>
+                <li class="is-active"><a href="#" aria-current="page">Sold at a loss</a></li>
+            </ul>
+        </nav>
+
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <h1 class="title is-3 mb-1">
+                        <i class="fa-solid fa-arrow-trend-down has-text-danger mr-2"></i>
+                        Properties sold at a loss
+                    </h1>
+                    <p class="subtitle is-6 has-text-grey">
+                        {{.SelectedSuburb}}{{if .SelectedState}}, {{.SelectedState}}{{end}} &bull; latest recorded sale below the previous recorded sale
+                    </p>
+                </div>
+            </div>
+            <div class="level-right">
+                <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}" class="button is-small is-light">
+                    <span class="icon"><i class="fa-solid fa-arrow-left"></i></span>
+                    <span>Back to suburb trends</span>
+                </a>
+            </div>
+        </div>
+
+        {{if .SelectedState}}
+        {{if .LossSummary}}
+        <div class="columns is-multiline mb-5">
+            <div class="column is-6-mobile is-3-tablet">
+                <div class="card p-4 has-background-danger-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-house-circle-xmark mr-1"></i> Sold at a loss</p>
+                    <p class="title is-3 has-text-danger mb-0">{{.LossSummary.Losses}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">of {{.LossSummary.Resales}} resales ({{printf "%.1f%%" .LossRate}})</p>
+                </div>
+            </div>
+            <div class="column is-6-mobile is-3-tablet">
+                <div class="card p-4 has-background-warning-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-sack-dollar mr-1"></i> Total nominal loss</p>
+                    <p class="title is-3 has-text-warning-dark mb-0">${{absPrice .LossSummary.TotalLoss}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Across recorded losses</p>
+                </div>
+            </div>
+            <div class="column is-6-mobile is-3-tablet">
+                <div class="card p-4 has-background-info-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-calculator mr-1"></i> Average loss</p>
+                    <p class="title is-3 has-text-info mb-0">${{absPrice .LossSummary.AverageLoss}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Per loss-making resale</p>
+                </div>
+            </div>
+            <div class="column is-6-mobile is-3-tablet">
+                <div class="card p-4 has-background-primary-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-down mr-1"></i> Largest loss</p>
+                    <p class="title is-3 has-text-primary mb-0">${{absPrice .LossSummary.LargestLoss}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Single largest nominal loss</p>
+                </div>
+            </div>
+        </div>
+        {{end}}
+
+        <div class="level is-mobile mb-3">
+            <div class="level-left">
+                <div class="buttons has-addons mb-0">
+                    <a href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=2&sort={{.LossSort}}&type={{.LossType}}" class="button is-small {{if eq .LossRange "2"}}is-primary{{else}}is-light{{end}}">2 years</a>
+                    <a href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=5&sort={{.LossSort}}&type={{.LossType}}" class="button is-small {{if eq .LossRange "5"}}is-primary{{else}}is-light{{end}}">5 years</a>
+                    <a href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=10&sort={{.LossSort}}&type={{.LossType}}" class="button is-small {{if eq .LossRange "10"}}is-primary{{else}}is-light{{end}}">10 years</a>
+                    <a href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=all&sort={{.LossSort}}&type={{.LossType}}" class="button is-small {{if eq .LossRange "all"}}is-primary{{else}}is-light{{end}}">All time</a>
+                </div>
+            </div>
+            <div class="level-right">
+                <div class="buttons has-addons mb-0">
+                    <a href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.LossRange}}&sort=amount&type={{.LossType}}" class="button is-small {{if eq .LossSort "amount"}}is-primary{{else}}is-light{{end}}">Largest $</a>
+                    <a href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.LossRange}}&sort=percent&type={{.LossType}}" class="button is-small {{if eq .LossSort "percent"}}is-primary{{else}}is-light{{end}}">Largest %</a>
+                    <a href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.LossRange}}&sort=date&type={{.LossType}}" class="button is-small {{if eq .LossSort "date"}}is-primary{{else}}is-light{{end}}">Most recent</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="tabs is-toggle is-small mb-3">
+            <ul>
+                {{range .LossTypeCounts}}
+                <li class="{{if eq .Key $.LossType}}is-active{{end}}">
+                    <a href="/suburbs/losses?suburb={{$.SelectedSuburb}}&state={{$.SelectedState}}&range={{$.LossRange}}&sort={{$.LossSort}}&type={{.Key}}"
+                       title="{{.Losses}} of {{.Resales}} resales at a loss ({{printf "%.1f%%" .Rate}})">
+                        {{.Label}} ({{.Losses}})
+                    </a>
+                </li>
+                {{end}}
+            </ul>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-content p-0">
+                {{if .LossSales}}
+                <div class="table-container mb-0">
+                    <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                        <thead>
+                            <tr class="has-background-light">
+                                <th scope="col">Address</th>
+                                <th scope="col">Type</th>
+                                <th scope="col">Previous sale</th>
+                                <th scope="col">Latest sale</th>
+                                <th scope="col">Loss</th>
+                                <th scope="col">Held</th>
+                                <th scope="col" class="has-text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{range .LossSales}}
+                            <tr>
+                                <td>
+                                    <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
+                                        {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
+                                    </a>
+                                    <br><small class="has-text-grey">{{.Suburb}}, {{.State}} {{.Postcode}}</small>
+                                </td>
+                                <td>
+                                    <span class="tag is-small {{if eq .DwellingType "house"}}is-info{{else if eq .DwellingType "unit"}}is-primary{{else if eq .DwellingType "townhouse"}}is-warning{{else}}is-light{{end}} is-light">
+                                        {{dwellingLabel .DwellingType}}
+                                    </span>
+                                </td>
+                                <td>
+                                    {{formatDate .PreviousDate}}<br>
+                                    <span class="has-text-grey">${{formatPrice .PreviousPrice}}</span>
+                                </td>
+                                <td>
+                                    {{formatDate .SettlementDate}}<br>
+                                    <span class="has-text-weight-bold">${{formatPrice .SalePrice}}</span>
+                                </td>
+                                <td>
+                                    <span class="has-text-danger has-text-weight-bold">-${{absPrice .LossAmount}}</span><br>
+                                    <small class="has-text-danger">({{printf "%.1f%%" .LossPercent}})</small>
+                                    {{if lt .LossPercent -80.0}}<br><span class="tag is-warning is-light is-small mt-1">Check data</span>{{end}}
+                                </td>
+                                <td>{{formatHolding .HoldingDays}}</td>
+                                <td class="has-text-right">
+                                    <a href="/property/{{.GnafPid}}" class="button is-small is-light is-primary">View property</a>
+                                </td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+                {{else}}
+                <div class="p-5 has-text-centered">
+                    <p class="has-text-grey">No recorded resales at a loss in this period.</p>
+                    <p class="is-size-7 has-text-grey mt-1">Try a longer time range or a different suburb.</p>
+                </div>
+                {{end}}
+            </div>
+            {{if .LossTotal}}
+            <footer class="card-footer">
+                <div class="card-footer-item is-size-7 has-text-grey">
+                    Showing {{.ShowingFrom}}–{{.ShowingTo}} of {{.LossTotal}} properties
+                </div>
+                <div class="card-footer-item">
+                    <div class="buttons has-addons mb-0">
+                        {{if .HasPrev}}
+                        <a class="button is-small is-light" href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.LossRange}}&sort={{.LossSort}}&type={{.LossType}}&page={{.PrevPage}}">
+                            <span class="icon is-small"><i class="fa-solid fa-chevron-left"></i></span><span>Previous</span>
+                        </a>
+                        {{else}}
+                        <button class="button is-small is-light" disabled>Previous</button>
+                        {{end}}
+                        {{if .HasNext}}
+                        <a class="button is-small is-light" href="/suburbs/losses?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.LossRange}}&sort={{.LossSort}}&type={{.LossType}}&page={{.NextPage}}">
+                            <span>Next</span><span class="icon is-small"><i class="fa-solid fa-chevron-right"></i></span>
+                        </a>
+                        {{else}}
+                        <button class="button is-small is-light" disabled>Next</button>
+                        {{end}}
+                    </div>
+                </div>
+            </footer>
+            {{end}}
+        </div>
+
+        <div class="message is-light mt-4">
+            <div class="message-body is-size-7 has-text-grey">
+                <strong>About this data:</strong> losses are nominal and based on recorded settlement history. Same-day resales are excluded. Records are linked by property ID, or by identical address when IDs differ; changed property IDs, missing sales, partial titles, related-party transfers or data errors can affect results. Rows marked <span class="tag is-warning is-light is-small">Check data</span> have a drop of more than 80%.
+            </div>
+        </div>
+        {{else}}
+        <div class="notification is-warning is-light">
+            <p><strong>Choose a suburb and state to see loss-making resales.</strong></p>
+            <p class="is-size-7 mt-1">Use the search on the <a href="/suburbs">suburb trends</a> page.</p>
+        </div>
+        {{end}}
+    </div>
+</section>
+{{end}}

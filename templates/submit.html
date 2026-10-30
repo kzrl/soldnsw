@@ -1,0 +1,111 @@
+{{define "title"}}Add a Sale - SoldNSW{{end}}
+
+{{define "content"}}
+<section class="section py-5">
+    <div class="container">
+        <div class="columns is-centered">
+            <div class="column is-8-tablet is-6-desktop">
+                <div class="has-text-centered mb-5">
+                    <span class="icon is-large has-text-primary mb-2">
+                        <i class="fa-solid fa-circle-plus fa-2x"></i>
+                    </span>
+                    <h1 class="title is-3">Add a sale</h1>
+                    <p class="subtitle is-6 has-text-grey">
+                        Record an auction result, private treaty or registered settlement.
+                    </p>
+                </div>
+
+                <div class="card shadow-md">
+                    <div class="card-content p-5">
+                        <form action="/submit" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+                            {{if .PrefillProperty}}
+                            <div class="notification is-info is-light mb-5">
+                                <p class="heading has-text-grey-dark mb-1">Selected property</p>
+                                <p class="has-text-weight-bold is-size-5">
+                                    {{if and .PrefillProperty.StreetNumber.Valid .PrefillProperty.StreetNumber.String}}{{.PrefillProperty.StreetNumber.String}} {{end}}{{.PrefillProperty.StreetName}} {{.PrefillProperty.StreetType}}
+                                </p>
+                                <p class="is-size-7 has-text-grey">
+                                    {{.PrefillProperty.Suburb}}, {{.PrefillProperty.State}} {{.PrefillProperty.Postcode}}
+                                </p>
+                                <input type="hidden" name="gnaf_pid" value="{{.PrefillProperty.GnafPid}}">
+                                <a href="/" class="is-size-7">Choose a different property</a>
+                            </div>
+                            {{else}}
+                            <div class="field mb-4">
+                                <label class="label" for="gnafPidInput">Property ID <span class="has-text-danger">*</span></label>
+                                <div class="control has-icons-left">
+                                    <input class="input is-medium is-family-monospace" type="text" name="gnaf_pid" id="gnafPidInput" placeholder="e.g. GANSW718293841" value="{{.PreFillPID}}" required>
+                                    <span class="icon is-small is-left">
+                                        <i class="fa-solid fa-fingerprint"></i>
+                                    </span>
+                                </div>
+                                <p class="help has-text-grey">
+                                    Find this on the property page after searching for the address.
+                                    <a href="/">Search for an address</a>
+                                </p>
+                            </div>
+                            {{end}}
+
+                            <div class="field mb-4">
+                                <label class="label" for="settlementDate">Settlement date <span class="has-text-danger">*</span></label>
+                                <div class="control has-icons-left">
+                                    <input class="input is-medium" type="date" id="settlementDate" name="settlement_date" required min="1990-01-01" max="{{.MaxSaleDate}}" value="{{.TodayDate}}">
+                                    <span class="icon is-small is-left">
+                                        <i class="fa-regular fa-calendar"></i>
+                                    </span>
+                                </div>
+                                <p class="help has-text-grey">The date the sale settled or was recorded.</p>
+                            </div>
+
+                            <div class="field mb-4">
+                                <label class="label" for="salePrice">Sale price (AUD) <span class="has-text-danger">*</span></label>
+                                <div class="control has-icons-left">
+                                    <input class="input is-medium has-text-weight-bold" type="number" id="salePrice" name="sale_price" min="10001" step="1" placeholder="e.g. 1450000" required>
+                                    <span class="icon is-small is-left">
+                                        <i class="fa-solid fa-dollar-sign"></i>
+                                    </span>
+                                </div>
+                                <p class="help has-text-grey">Final sale price in Australian dollars. Minimum $10,001.</p>
+                            </div>
+
+                            <div class="field mb-5">
+                                <label class="label" for="sourceType">Sale source <span class="has-text-danger">*</span></label>
+                                <div class="control has-icons-left">
+                                    <div class="select is-medium is-fullwidth">
+                                        <select id="sourceType" name="source_type" required>
+                                            <option value="Auction">Auction</option>
+                                            <option value="Private Treaty">Private treaty</option>
+                                            <option value="Public Registry" selected>Public registry / Valuer General</option>
+                                            <option value="Prior to Auction">Prior to auction</option>
+                                            <option value="Expression of Interest">Expression of interest</option>
+                                        </select>
+                                    </div>
+                                    <div class="icon is-small is-left">
+                                        <i class="fa-solid fa-gavel"></i>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="field mt-5">
+                                <button type="submit" class="button is-primary is-medium is-fullwidth has-text-weight-bold">
+                                    <span class="icon"><i class="fa-solid fa-paper-plane"></i></span>
+                                    <span>Submit sale record</span>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="message is-info is-light mt-5">
+                    <div class="message-body is-size-7">
+                        <p class="has-text-weight-bold mb-1"><i class="fa-solid fa-circle-info mr-1"></i> Before you submit</p>
+                        <p>Sale records are public. Check the property and price carefully before submitting.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{{end}}

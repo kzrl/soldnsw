@@ -1,0 +1,405 @@
+{{define "title"}}NSW Property Sales &amp; Suburb Trends - SoldNSW{{end}}
+
+{{define "content"}}
+<!-- Hero Search Section -->
+<section class="hero {{if .HasSearched}}is-small{{else}}is-medium{{end}} is-dark hero-search-bg">
+    <div class="hero-body">
+        <div class="container has-text-centered">
+            <h1 class="title {{if .HasSearched}}is-3{{else}}is-2{{end}} has-text-weight-bold">
+                {{if .HasSearched}}Search properties{{else}}Find NSW property sales{{end}}
+            </h1>
+            <p class="subtitle is-6 has-text-grey-light mt-2">
+                {{if .HasSearched}}Search by another address or refine the filters below.{{else}}Search by full address, street or suburb.{{end}}
+            </p>
+
+            <!-- Search Card -->
+            <div class="columns is-centered mt-4">
+                <div class="column is-9">
+                    <div class="box has-background-white has-text-left p-5 shadow-lg">
+                        <form action="/properties" method="GET" id="addressSearchForm" autocomplete="off">
+                            <label class="label is-small has-text-grey-dark" for="addressSearch">Search by address</label>
+                            <div class="field has-addons mb-2">
+                                <div class="control is-expanded has-icons-left">
+                                    <input id="addressSearch" class="input is-medium is-primary" type="text" name="address" placeholder="e.g. 17 Arnold St Killara NSW 2071" value="{{.QueryAddress}}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="addressSuggestions">
+                                    <span class="icon is-small is-left"><i class="fa-solid fa-location-dot"></i></span>
+                                </div>
+                                <div class="control">
+                                    <button type="submit" class="button is-medium is-primary has-text-weight-bold">
+                                        <span class="icon"><i class="fa-solid fa-magnifying-glass"></i></span>
+                                        <span>Search</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="addressSuggestions" class="address-suggestions" role="listbox" hidden></div>
+                            <p class="help has-text-grey">Start typing an address, street or suburb. Press Enter to search.</p>
+                            {{if .HasSearched}}
+                            <div class="has-text-right">
+                                <a href="/" class="is-size-7 has-text-grey"><i class="fa-solid fa-xmark mr-1"></i>Clear search</a>
+                            </div>
+                            {{end}}
+                        </form>
+
+                        <details class="mt-3" {{if or .QuerySuburb .QueryStreet .QueryNumber .QueryPostcode}}open{{end}}>
+                            <summary class="is-size-7 has-text-grey">Advanced search by suburb, street, number or postcode</summary>
+                            <form action="/properties" method="GET" class="mt-3">
+                                <div class="columns is-variable is-2 is-multiline">
+                                    <div class="column is-2">
+                                        <label class="label is-small has-text-grey-dark" for="searchNumber">Number</label>
+                                        <input id="searchNumber" class="input" type="text" name="number" placeholder="17" value="{{.QueryNumber}}" autocomplete="off">
+                                    </div>
+                                    <div class="column is-3">
+                                        <label class="label is-small has-text-grey-dark" for="searchStreet">Street</label>
+                                        <input id="searchStreet" class="input" type="text" name="street" placeholder="ARNOLD" value="{{.QueryStreet}}" autocomplete="off">
+                                    </div>
+                                    <div class="column is-3">
+                                        <label class="label is-small has-text-grey-dark" for="searchSuburb">Suburb</label>
+                                        <input id="searchSuburb" class="input" type="text" name="suburb" placeholder="KILLARA" value="{{.QuerySuburb}}" autocomplete="off">
+                                    </div>
+                                    <div class="column is-2">
+                                        <label class="label is-small has-text-grey-dark" for="searchState">State</label>
+                                        <div class="select is-fullwidth">
+                                            <select id="searchState" name="state">
+                                                <option value="" {{if eq .QueryState ""}}selected{{end}}>All</option>
+                                                <option value="NSW" {{if eq .QueryState "NSW"}}selected{{end}}>NSW</option>
+                                                <option value="VIC" {{if eq .QueryState "VIC"}}selected{{end}}>VIC</option>
+                                                <option value="QLD" {{if eq .QueryState "QLD"}}selected{{end}}>QLD</option>
+                                                <option value="WA" {{if eq .QueryState "WA"}}selected{{end}}>WA</option>
+                                                <option value="SA" {{if eq .QueryState "SA"}}selected{{end}}>SA</option>
+                                                <option value="TAS" {{if eq .QueryState "TAS"}}selected{{end}}>TAS</option>
+                                                <option value="ACT" {{if eq .QueryState "ACT"}}selected{{end}}>ACT</option>
+                                                <option value="NT" {{if eq .QueryState "NT"}}selected{{end}}>NT</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="column is-2">
+                                        <label class="label is-small has-text-grey-dark" for="searchPostcode">Postcode</label>
+                                        <input id="searchPostcode" class="input" type="text" name="postcode" placeholder="2071" value="{{.QueryPostcode}}" inputmode="numeric" maxlength="4">
+                                    </div>
+                                    <div class="column is-2">
+                                        <label class="label is-small has-text-grey-dark" for="searchDwelling">Dwelling</label>
+                                        <div class="select is-fullwidth">
+                                            <select id="searchDwelling" name="dwelling">
+                                                <option value="" {{if eq .QueryDwellingType ""}}selected{{end}}>All</option>
+                                                <option value="house" {{if eq .QueryDwellingType "house"}}selected{{end}}>House</option>
+                                                <option value="unit" {{if eq .QueryDwellingType "unit"}}selected{{end}}>Unit</option>
+                                                <option value="townhouse" {{if eq .QueryDwellingType "townhouse"}}selected{{end}}>Townhouse</option>
+                                                <option value="other" {{if eq .QueryDwellingType "other"}}selected{{end}}>Other</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="column is-2">
+                                        <label class="label is-small">&nbsp;</label>
+                                        <button type="submit" class="button is-primary is-fullwidth">Search</button>
+                                    </div>
+                                </div>
+                            </form>
+                        </details>
+
+                        <!-- Popular Suburbs -->
+                        {{if and (not .HasSearched) .TopSuburbs}}
+                        <div class="is-flex is-align-items-center is-flex-wrap-wrap mt-3 pt-3" style="border-top: 1px solid #f0f0f0;">
+                            <span class="is-size-7 has-text-grey mr-2"><i class="fa-solid fa-fire text-warning mr-1"></i> Popular suburbs:</span>
+                            <div class="tags are-small mb-0">
+                                {{range .TopSuburbs}}
+                                <a href="/properties?suburb={{.Suburb}}&state={{.State}}" class="tag is-info is-light">{{.Suburb}} ({{.State}})</a>
+                                {{end}}
+                            </div>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Stats Bar -->
+<div class="has-background-light py-4" style="border-bottom: 1px solid #e5e7eb;">
+    <div class="container">
+        <nav class="level mb-0">
+            <div class="level-item has-text-centered">
+                <div>
+                    <p class="heading has-text-grey"><i class="fa-solid fa-map-pin mr-1"></i> Address records</p>
+                    <p class="title is-4 has-text-primary">{{formatCount .TotalProperties}}</p>
+                </div>
+            </div>
+            <div class="level-item has-text-centered">
+                <div>
+                    <p class="heading has-text-grey"><i class="fa-solid fa-receipt mr-1"></i> Sales recorded</p>
+                    <p class="title is-4 has-text-info">{{formatCount .TotalSales}}</p>
+                </div>
+            </div>
+            <div class="level-item has-text-centered">
+                <div>
+                    <p class="heading has-text-grey"><i class="fa-solid fa-city mr-1"></i> Suburbs covered</p>
+                    <p class="title is-4 has-text-dark">{{formatCount .TotalSuburbs}}</p>
+                </div>
+            </div>
+            <div class="level-item has-text-centered">
+                <div>
+                    <p class="heading has-text-grey"><i class="fa-regular fa-calendar-check mr-1"></i> Latest recorded sale</p>
+                    <p class="title is-4 has-text-success">{{if .LatestSaleDate}}{{formatDate .LatestSaleDate}}{{else}}—{{end}}</p>
+                </div>
+            </div>
+        </nav>
+    </div>
+</div>
+
+<!-- Search Results -->
+{{if .HasSearched}}
+<section class="section py-5">
+    <div class="container">
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <h2 class="title is-4 mb-1">
+                        Search results{{if .QueryAddress}} for <span class="has-text-primary">“{{.QueryAddress}}”</span>{{else}}{{if .QueryNumber}} for <span class="has-text-primary">{{.QueryNumber}}</span>{{end}}{{if .QuerySuburb}} in <span class="has-text-primary">{{.QuerySuburb}}</span>{{end}}{{if .QueryStreet}} on streets starting with "{{.QueryStreet}}"{{end}}{{if .QueryPostcode}} {{.QueryPostcode}}{{end}}{{if .QueryState}} {{.QueryState}}{{end}}{{end}}
+                    </h2>
+                    <p class="subtitle is-6 has-text-grey">
+                        {{len .Properties}} address record{{if ne (len .Properties) 1}}s{{end}}{{if eq (len .Properties) 50}} (showing the first 50 — add a street or state to narrow the search){{end}}
+                    </p>
+                </div>
+            </div>
+            {{if .QuerySuburb}}
+            <div class="level-right">
+                <a href="/suburbs?suburb={{.QuerySuburb}}{{if .QueryState}}&state={{.QueryState}}{{end}}" class="button is-info is-outlined is-small">
+                    <span class="icon"><i class="fa-solid fa-chart-line"></i></span>
+                    <span>View {{.QuerySuburb}} trends</span>
+                </a>
+            </div>
+            {{end}}
+        </div>
+
+        {{if .Properties}}
+        <div class="table-container">
+            <table class="table is-fullwidth is-hoverable is-striped">
+                <thead>
+                    <tr class="has-background-light">
+                        <th scope="col">Address</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Suburb</th>
+                        <th scope="col">State / Postcode</th>
+                        <th scope="col" class="has-text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Properties}}
+                    <tr>
+                        <td>
+                            <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
+                                {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
+                            </a>
+                            {{if or .LotNumber.Valid .PlanNumber.Valid}}
+                            <br><small class="has-text-grey">Lot {{if .LotNumber.Valid}}{{.LotNumber.String}}{{else}}—{{end}}, Plan {{if .PlanNumber.Valid}}{{.PlanNumber.String}}{{else}}—{{end}}</small>
+                            {{end}}
+                        </td>
+                        <td>
+                            <span class="tag is-light is-small">{{dwellingLabel .DwellingType}}</span>
+                        </td>
+                        <td>
+                            <a href="/suburbs?suburb={{.Suburb}}&state={{.State}}" class="has-text-link">{{.Suburb}}</a>
+                        </td>
+                        <td><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
+                        <td class="has-text-right">
+                            <a href="/property/{{.GnafPid}}" class="button is-small is-primary is-light">
+                                <span>View sales</span>
+                                <span class="icon is-small"><i class="fa-solid fa-arrow-right"></i></span>
+                            </a>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{else}}
+        <div class="notification is-warning is-light p-5 has-text-centered">
+            <p class="is-size-5 mb-2"><i class="fa-solid fa-triangle-exclamation mr-2"></i> No matching properties found{{if .QueryAddress}} for <strong>“{{.QueryAddress}}”</strong>{{else}}{{if .QueryNumber}} at <strong>{{.QueryNumber}}</strong>{{end}}{{if .QuerySuburb}} in <strong>{{.QuerySuburb}}</strong>{{end}}{{if .QueryState}} ({{.QueryState}}){{end}}{{end}}</p>
+            <p class="has-text-grey mb-3">Check the spelling, try a broader search, or use the advanced filters.</p>
+            <a href="/" class="button is-small is-dark">Clear search</a>
+        </div>
+        {{end}}
+    </div>
+</section>
+{{end}}
+
+<!-- Recent Sales -->
+<section class="section py-5">
+    <div class="container">
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <h2 class="title is-4 mb-1">
+                        <i class="fa-solid fa-clock-rotate-left has-text-info mr-2"></i> Recent sales
+                    </h2>
+                    <p class="subtitle is-6 has-text-grey">Latest recorded transactions across available sales data</p>
+                </div>
+            </div>
+            <div class="level-right">
+                <a href="/suburbs" class="button is-small is-primary is-outlined">
+                    <span class="icon"><i class="fa-solid fa-chart-simple"></i></span>
+                    <span>Browse suburbs</span>
+                </a>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table class="table is-fullwidth is-hoverable is-striped">
+                <thead>
+                    <tr class="has-background-light">
+                        <th scope="col">Date</th>
+                        <th scope="col">Address</th>
+                        <th scope="col">Suburb / State</th>
+                        <th scope="col">Sold price</th>
+                        <th scope="col">Source</th>
+                        <th scope="col" class="has-text-right">Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .RecentSales}}
+                    <tr>
+                        <td>{{formatDate .SettlementDate}}</td>
+                        <td>
+                            <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
+                                {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
+                            </a>
+                        </td>
+                        <td>
+                            <a href="/properties?suburb={{.Suburb}}&state={{.State}}" class="has-text-link">{{.Suburb}}</a>,
+                            <span class="tag is-small is-dark is-light">{{.State}}</span> {{.Postcode}}
+                        </td>
+                        <td>
+                            <span class="has-text-weight-bold has-text-success is-size-6">${{formatPrice .SalePrice}}</span>
+                        </td>
+                        <td>
+                            <span class="tag is-small {{if eq .SourceType "Auction"}}is-warning is-light{{else if eq .SourceType "Public Registry"}}is-info is-light{{else}}is-light{{end}}">
+                                {{if eq .SourceType "NSW Valuer General (PSI)"}}Valuer General{{else}}{{.SourceType}}{{end}}
+                            </span>
+                        </td>
+                        <td class="has-text-right">
+                            <a href="/property/{{.GnafPid}}" class="button is-small is-link is-light">View sales</a>
+                        </td>
+                    </tr>
+                    {{else}}
+                    <tr>
+                        <td colspan="6" class="has-text-centered py-4 has-text-grey">
+                            No sales recorded yet. Seed sample data or import a PSI archive to get started.
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    const input = document.getElementById("addressSearch");
+    const box = document.getElementById("addressSuggestions");
+    if (!input || !box) return;
+
+    let timer = null;
+    let matches = [];
+    let active = -1;
+
+    function closeSuggestions() {
+        box.hidden = true;
+        box.innerHTML = "";
+        matches = [];
+        active = -1;
+        input.setAttribute("aria-expanded", "false");
+        input.removeAttribute("aria-activedescendant");
+    }
+
+    function escapeHtml(value) {
+        const div = document.createElement("div");
+        div.textContent = value;
+        return div.innerHTML;
+    }
+
+    function goTo(match) {
+        if (!match || !match.pid) return;
+        window.location.href = "/property/" + encodeURIComponent(match.pid);
+    }
+
+    function highlight() {
+        box.querySelectorAll(".address-suggestion").forEach(function (el, index) {
+            el.classList.toggle("is-active", index === active);
+        });
+        if (active >= 0) {
+            const current = box.querySelector('[data-index="' + active + '"]');
+            if (current) {
+                input.setAttribute("aria-activedescendant", current.id);
+                current.scrollIntoView({ block: "nearest" });
+            }
+        } else {
+            input.removeAttribute("aria-activedescendant");
+        }
+    }
+
+    function render(nextMatches) {
+        matches = Array.isArray(nextMatches) ? nextMatches : [];
+        active = -1;
+        if (!matches.length) {
+            closeSuggestions();
+            return;
+        }
+        box.innerHTML = matches.map(function (match, index) {
+            return '<button type="button" id="addressOption' + index + '" data-index="' + index + '" class="address-suggestion" role="option">' +
+                '<span class="icon is-small"><i class="fa-solid fa-location-dot"></i></span>' +
+                '<span>' + escapeHtml(match.label) + '</span>' +
+                '</button>';
+        }).join("");
+        box.querySelectorAll(".address-suggestion").forEach(function (el) {
+            el.addEventListener("click", function () {
+                goTo(matches[Number(el.dataset.index)]);
+            });
+        });
+        box.hidden = false;
+        input.setAttribute("aria-expanded", "true");
+    }
+
+    async function fetchSuggestions(query) {
+        try {
+            const response = await fetch("/api/address/suggest?q=" + encodeURIComponent(query), {
+                headers: { "Accept": "application/json" }
+            });
+            if (!response.ok) throw new Error("suggestions unavailable");
+            render(await response.json());
+        } catch (err) {
+            closeSuggestions();
+        }
+    }
+
+    input.addEventListener("input", function () {
+        const query = input.value.trim();
+        clearTimeout(timer);
+        if (query.length < 2) {
+            closeSuggestions();
+            return;
+        }
+        timer = setTimeout(function () { fetchSuggestions(query); }, 200);
+    });
+
+    input.addEventListener("keydown", function (event) {
+        if (box.hidden) return;
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            if (!matches.length) return;
+            active = (active + (event.key === "ArrowDown" ? 1 : -1) + matches.length) % matches.length;
+            highlight();
+        } else if (event.key === "Enter" && active >= 0) {
+            event.preventDefault();
+            goTo(matches[active]);
+        } else if (event.key === "Escape") {
+            closeSuggestions();
+        }
+    });
+
+    document.addEventListener("click", function (event) {
+        if (event.target !== input && !box.contains(event.target)) {
+            closeSuggestions();
+        }
+    });
+});
+</script>
+{{end}}

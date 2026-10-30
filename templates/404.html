@@ -1,0 +1,26 @@
+{{define "title"}}Page Not Found - SoldNSW{{end}}
+
+{{define "content"}}
+<section class="section py-6">
+    <div class="container has-text-centered">
+        <p class="title is-1 has-text-primary">404</p>
+        <h1 class="title is-3">We couldn't find that page</h1>
+        <p class="subtitle is-6 has-text-grey mb-5">The page may have moved, or the property record no longer exists.</p>
+        <a href="/" class="button is-primary is-medium">
+            <span class="icon"><i class="fa-solid fa-magnifying-glass"></i></span>
+            <span>Search properties</span>
+        </a>
+
+        {{if .TopSuburbs}}
+        <div class="mt-5">
+            <p class="is-size-7 has-text-grey mb-2">Popular suburbs:</p>
+            <div class="tags is-centered">
+                {{range .TopSuburbs}}
+                <a href="/properties?suburb={{.Suburb}}&state={{.State}}" class="tag is-info is-light">{{.Suburb}} ({{.State}})</a>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+    </div>
+</section>
+{{end}}

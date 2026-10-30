@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "title" .}}NSW Property Sales &amp; Suburb Trends{{end}}</title>
+
+    <!-- Bulma CSS v1.0.3 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.3/css/bulma.min.css">
+
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <!-- Page-specific assets (maps and charts) -->
+    {{block "head" .}}{{end}}
+
+    <!-- Custom Enhancements -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar is-dark is-spaced" role="navigation" aria-label="main navigation">
+        <div class="container">
+            <div class="navbar-brand">
+                <a class="navbar-item is-size-4 has-text-weight-bold" href="/">
+                    <span class="icon-text">
+                        <span class="icon has-text-warning"><i class="fa-solid fa-house-circle-check"></i></span>
+                        <span class="has-text-white ml-2">Sold<span class="has-text-warning">NSW</span></span>
+                    </span>
+                </a>
+
+                <a role="button" class="navbar-burger" aria-label="Open menu" aria-expanded="false" data-target="navbarMenu">
+                    <span aria-hidden="true"></span>
+                    <span aria-hidden="true"></span>
+                    <span aria-hidden="true"></span>
+                </a>
+            </div>
+
+            <div id="navbarMenu" class="navbar-menu">
+                <div class="navbar-start">
+                    <a class="navbar-item {{if eq .ActiveNav "search"}}is-active{{end}}" href="/">
+                        <span class="icon mr-1"><i class="fa-solid fa-magnifying-glass"></i></span>
+                        Search
+                    </a>
+                    <a class="navbar-item {{if eq .ActiveNav "analytics"}}is-active{{end}}" href="/suburbs">
+                        <span class="icon mr-1"><i class="fa-solid fa-chart-line"></i></span>
+                        Suburbs
+                    </a>
+                    <a class="navbar-item {{if eq .ActiveNav "submit"}}is-active{{end}}" href="/submit">
+                        <span class="icon mr-1"><i class="fa-solid fa-circle-plus"></i></span>
+                        Add a sale
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Flash Notification Messages -->
+    {{if .Flash}}
+    <div class="container mt-4">
+        <div class="notification is-{{if .Flash.Type}}{{.Flash.Type}}{{else}}info{{end}} is-light">
+            <button class="delete" aria-label="Dismiss notification" onclick="this.parentElement.remove()"></button>
+            <span class="icon-text">
+                <span class="icon"><i class="fa-solid fa-circle-info"></i></span>
+                <span>{{.Flash.Message}}</span>
+            </span>
+        </div>
+    </div>
+    {{end}}
+
+    <!-- Main Body Content -->
+    <main>
+        {{block "content" .}}{{end}}
+    </main>
+
+    <!-- Footer with data attribution -->
+    <footer class="footer mt-6">
+        <div class="container">
+            <div class="columns">
+                <div class="column is-7">
+                    <p class="has-text-weight-bold is-size-5 mb-2">
+                        <i class="fa-solid fa-house-circle-check has-text-warning mr-1"></i> SoldNSW
+                    </p>
+                    <p class="has-text-grey">
+                        NSW property sales, settlement history and suburb market trends.
+                    </p>
+                </div>
+                <div class="column is-5">
+                    <p class="is-size-7 has-text-grey">
+                        <strong>Data sources:</strong> NSW Valuer General Property Sales Information (PSI). Address records may incorporate the Geocoded National Address File (G-NAF) &copy; <a href="https://geoscape.com.au" target="_blank" rel="noopener noreferrer">Geoscape Australia</a>, licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>.
+                    </p>
+                </div>
+            </div>
+            <hr class="my-4">
+            <div class="content has-text-centered is-size-7 has-text-grey">
+                <p>&copy; 2026 SoldNSW</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Bulma Navbar toggle
+        document.addEventListener('DOMContentLoaded', () => {
+            const $navbarBurgers = Array.prototype.slice.call(document.querySelectorAll('.navbar-burger'), 0);
+            $navbarBurgers.forEach(el => {
+                el.addEventListener('click', () => {
+                    const target = el.dataset.target;
+                    const $target = document.getElementById(target);
+                    el.classList.toggle('is-active');
+                    $target.classList.toggle('is-active');
+                    el.setAttribute('aria-expanded', el.classList.contains('is-active') ? 'true' : 'false');
+                });
+            });
+        });
+    </script>
+</body>
+</html>

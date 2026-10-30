@@ -1,0 +1,15 @@
+version: "2"
+sql:
+  - schema: "../internal/database/schema.sql"
+    queries: "query.sql"
+    engine: "sqlite"
+    gen:
+      go:
+        package: "database"
+        out: "../internal/database"
+        sql_package: "database/sql"
+        overrides:
+          - db_type: "int"
+            go_type: "int64"
+          - db_type: "integer"
+            go_type: "int64"
