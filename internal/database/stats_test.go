@@ -45,6 +45,9 @@ func TestRefreshSuburbStatsPriceChanges(t *testing.T) {
 	seed("S-5Y", 66, 400000)
 	seed("S-10Y", 126, 300000)
 
+	if err := RebuildCanonicalSales(context.Background(), db); err != nil {
+		t.Fatalf("rebuild canonical sales: %v", err)
+	}
 	if err := RefreshSuburbStats(context.Background(), db); err != nil {
 		t.Fatalf("refresh stats: %v", err)
 	}
@@ -93,6 +96,9 @@ func TestRefreshSuburbStatUpdatesPriceChanges(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	if err := RebuildCanonicalSales(context.Background(), db); err != nil {
+		t.Fatalf("rebuild canonical sales: %v", err)
+	}
 	if err := RefreshSuburbStat(context.Background(), db, "TESTVILLE", "NSW"); err != nil {
 		t.Fatalf("initial refresh: %v", err)
 	}
@@ -101,6 +107,9 @@ func TestRefreshSuburbStatUpdatesPriceChanges(t *testing.T) {
 		VALUES ('S-2', 'PID-1', date('now', '-6 months'), 600000, 'Public Registry');
 	`); err != nil {
 		t.Fatalf("second sale: %v", err)
+	}
+	if err := RefreshCanonicalSale(context.Background(), db, "S-2"); err != nil {
+		t.Fatalf("refresh canonical sale: %v", err)
 	}
 	if err := RefreshSuburbStat(context.Background(), db, "TESTVILLE", "NSW"); err != nil {
 		t.Fatalf("update refresh: %v", err)

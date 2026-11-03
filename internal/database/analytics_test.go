@@ -44,6 +44,10 @@ func TestGetSuburbAnalyticsMedianAndCutoff(t *testing.T) {
 		t.Fatalf("seed old sale: %v", err)
 	}
 
+	if err := RebuildCanonicalSales(context.Background(), db); err != nil {
+		t.Fatalf("rebuild canonical sales: %v", err)
+	}
+
 	q := New(db)
 	rows, err := q.GetSuburbAnalytics(context.Background(), GetSuburbAnalyticsParams{
 		Suburb: "TESTVILLE",

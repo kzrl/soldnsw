@@ -43,8 +43,8 @@ func TestRebuildPropertyLinks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical lookup: %v", err)
 	}
-	if canonical != "GANSW_PSI_259_2981264" {
-		t.Errorf("canonical = %q, want GANSW_PSI_259_2981264", canonical)
+	if canonical != "GANSW_PSI_003_2981264" {
+		t.Errorf("canonical = %q, want deterministic GANSW_PSI_003_2981264", canonical)
 	}
 
 	canonical, err = GetCanonicalPID(context.Background(), db, "GANSW_PSI_259_2981265")
@@ -63,6 +63,9 @@ func TestRebuildPropertyLinks(t *testing.T) {
 		t.Errorf("no-number property was merged: %q", canonical)
 	}
 
+	if err := RebuildCanonicalSales(context.Background(), db); err != nil {
+		t.Fatalf("rebuild canonical sales: %v", err)
+	}
 	if err := RefreshSuburbStats(context.Background(), db); err != nil {
 		t.Fatalf("refresh stats: %v", err)
 	}
@@ -76,11 +79,58 @@ func TestRebuildPropertyLinks(t *testing.T) {
 		t.Errorf("canonical property count = %d, want 3", properties)
 	}
 
-	sales, err := q.GetSalesHistoryByCanonical(context.Background(), "GANSW_PSI_259_2981264")
+	sales, err := q.GetSalesHistoryByCanonical(context.Background(), "GANSW_PSI_003_2981264")
 	if err != nil {
 		t.Fatalf("sales history: %v", err)
 	}
 	if len(sales) != 2 {
 		t.Errorf("merged sales = %d, want 2", len(sales))
+	}
+}
+
+func TestEnsurePropertyLinksRebuildsOldVersion(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "version.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(SchemaSQL); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO gnaf_properties (
+			gnaf_pid, street_number, street_name, street_type, suburb, state, postcode, lot_number, plan_number
+		) VALUES
+			('GANSW_PSI_003_123', '14', 'BELLBOWER', 'CL', 'GREEN POINT', 'NSW', '2251', '29', 'DP1045502'),
+			('GANSW_PSI_259_123', '14', 'BELLBOWER', 'CL', 'GREEN POINT', 'NSW', '2251', '29', 'DP1045502');
+		INSERT INTO property_links (gnaf_pid, canonical_pid, match_basis) VALUES
+			('GANSW_PSI_003_123', 'GANSW_PSI_259_123', 'address_lot_plan'),
+			('GANSW_PSI_259_123', 'GANSW_PSI_259_123', 'self');
+		INSERT INTO schema_meta (key, value) VALUES ('property_links_version', '1');
+	`); err != nil {
+		t.Fatalf("seed old links: %v", err)
+	}
+
+	rebuilt, err := EnsurePropertyLinks(context.Background(), db)
+	if err != nil {
+		t.Fatalf("ensure links: %v", err)
+	}
+	if !rebuilt {
+		t.Fatalf("expected old link version to be rebuilt")
+	}
+	canonical, err := GetCanonicalPID(context.Background(), db, "GANSW_PSI_259_123")
+	if err != nil {
+		t.Fatalf("canonical lookup: %v", err)
+	}
+	if canonical != "GANSW_PSI_003_123" {
+		t.Errorf("canonical = %q, want deterministic GANSW_PSI_003_123", canonical)
+	}
+	var version string
+	if err := db.QueryRow("SELECT value FROM schema_meta WHERE key = 'property_links_version'").Scan(&version); err != nil {
+		t.Fatalf("read version: %v", err)
+	}
+	if version != propertyLinksVersion {
+		t.Errorf("version = %q, want %q", version, propertyLinksVersion)
 	}
 }

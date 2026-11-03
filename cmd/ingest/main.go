@@ -354,8 +354,17 @@ func main() {
 	if err := database.RebuildPropertyLinks(ctx, db); err != nil {
 		log.Printf("Warning: could not rebuild property links: %v", err)
 	}
+	if err := database.RebuildCanonicalSales(ctx, db); err != nil {
+		log.Printf("Warning: could not rebuild canonical sales: %v", err)
+	}
 	if err := database.RefreshSuburbStats(ctx, db); err != nil {
 		log.Printf("Warning: could not rebuild suburb statistics: %v", err)
+	}
+	if err := database.RefreshStreetStats(ctx, db); err != nil {
+		log.Printf("Warning: could not rebuild street statistics: %v", err)
+	}
+	if err := database.RefreshPostcodeStats(ctx, db); err != nil {
+		log.Printf("Warning: could not rebuild postcode statistics: %v", err)
 	}
 	if err := database.RebuildAddressSearch(ctx, db); err != nil {
 		log.Printf("Warning: could not rebuild address search index: %v", err)

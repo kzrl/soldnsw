@@ -48,6 +48,20 @@ type App struct {
 	templates map[string]*template.Template
 	flashKey  []byte
 	limiter   *ipRateLimiter
+
+	lastImportMu      sync.Mutex
+	lastImportDate    string
+	lastImportChecked time.Time
+
+	suggestLimiter *ipRateLimiter
+	suggestCacheMu sync.Mutex
+	suggestCache   map[string]suggestionCacheEntry
+
+	statsMu      sync.Mutex
+	statsStatus  string
+	statsUpdated time.Time
+	statsError   string
+	statsTimeout time.Duration
 }
 
 // FlashMessage structure for user feedback.
@@ -77,6 +91,13 @@ type LossTypeCount struct {
 	Rate    float64
 }
 
+// QueryParam is a rendered query-string parameter for filter forms and pager
+// links.
+type QueryParam struct {
+	Name  string
+	Value string
+}
+
 // PageData represents common and view-specific template data.
 type PageData struct {
 	Title              string
@@ -85,12 +106,26 @@ type PageData struct {
 	QueryAddress       string
 	QuerySuburb        string
 	QueryStreet        string
+	QueryStreetType    string
 	QueryNumber        string
 	QueryState         string
 	QueryPostcode      string
 	QueryDwellingType  string
+	SearchMode         string
+	SearchError        string
 	HasSearched        bool
 	Properties         []database.GnafProperty
+	StreetMatches      []database.SearchStreetGroupsRow
+	StreetSummary      *database.GetStreetSummaryRow
+	PostcodeSummary    *database.GetPostcodeSummaryRow
+	PostcodeSuburbs    []database.GetPostcodeSuburbsRow
+	ResultTotal        int64
+	QuerySort          string
+	QueryOnlyWithSales bool
+	AllowRelevanceSort bool
+	PagerBaseURL       string
+	FilterAction       string
+	FilterParams       []QueryParam
 	RecentSales        []database.ListRecentSalesWithAddressRow
 	TotalProperties    int64
 	TotalSales         int64
@@ -150,6 +185,9 @@ type PageData struct {
 	TodayDate          string
 	MaxSaleDate        string
 	CSRFToken          string
+	LastImportDate     string
+	StatsStatus        string
+	StatsUpdated       string
 }
 
 // Custom template helper functions.
@@ -217,7 +255,8 @@ func templateFuncs() template.FuncMap {
 		"sub": func(a, b int) int {
 			return a - b
 		},
-		"int64": priceToInt,
+		"int64":     priceToInt,
+		"streetURL": streetSearchURL,
 	}
 }
 
@@ -363,6 +402,7 @@ func main() {
 	dbPath := flag.String("db", "properties.db", "Path to SQLite database")
 	templateDir := flag.String("templates", "templates", "Directory containing SSR HTML templates")
 	staticDir := flag.String("static", "static", "Directory containing static assets")
+	statsTimeoutSec := flag.Int("stats-timeout", 120, "Timeout in seconds for each materialised stats rebuild attempt")
 	flag.Parse()
 
 	// Environment variable overrides.
@@ -403,17 +443,45 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to build property links: %v", err)
 	}
+	canonicalSalesRebuilt := false
 	if linksRebuilt {
-		log.Printf("Canonical property links rebuilt; refreshing analytics and address search...")
-		if err := database.RefreshSuburbStats(context.Background(), db); err != nil {
-			log.Printf("Warning: suburb statistics refresh failed: %v", err)
+		log.Printf("Canonical property links rebuilt; refreshing canonical sales, analytics and address search...")
+		if err := database.RebuildCanonicalSales(context.Background(), db); err != nil {
+			log.Printf("Warning: canonical sales rebuild failed: %v", err)
+		} else {
+			canonicalSalesRebuilt = true
 		}
 		if err := database.RebuildAddressSearch(context.Background(), db); err != nil {
 			log.Printf("Warning: address search rebuild failed: %v", err)
 		}
 	}
+	canonicalSalesEnsured, err := database.EnsureCanonicalSales(context.Background(), db)
+	if err != nil {
+		log.Fatalf("Failed to build canonical sales: %v", err)
+	}
+	if canonicalSalesEnsured {
+		canonicalSalesRebuilt = true
+	}
+	if canonicalSalesRebuilt {
+		log.Printf("Canonical sales rebuilt; refreshing materialised statistics...")
+		if err := database.RefreshSuburbStats(context.Background(), db); err != nil {
+			log.Printf("Warning: suburb statistics refresh failed: %v", err)
+		}
+		if err := database.RefreshStreetStats(context.Background(), db); err != nil {
+			log.Printf("Warning: street statistics refresh failed: %v", err)
+		}
+		if err := database.RefreshPostcodeStats(context.Background(), db); err != nil {
+			log.Printf("Warning: postcode statistics refresh failed: %v", err)
+		}
+	}
 	if err := database.EnsureAddressSearch(context.Background(), db); err != nil {
 		log.Fatalf("Failed to build address search index: %v", err)
+	}
+	if missing, err := database.MissingSearchIndexes(context.Background(), db); err != nil {
+		log.Printf("Warning: could not check search indexes: %v", err)
+	} else if len(missing) > 0 {
+		log.Printf("Warning: %d search indexes are missing (%s). Run bin/migrate -db %s before serving production traffic.",
+			len(missing), database.DescribeMissingIndexes(missing), *dbPath)
 	}
 
 	tmpls, err := parseTemplates(*templateDir)
@@ -425,6 +493,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialise app: %v", err)
 	}
+	if *statsTimeoutSec > 0 {
+		app.statsTimeout = time.Duration(*statsTimeoutSec) * time.Second
+	}
 
 	mux := http.NewServeMux()
 	fs := http.FileServer(http.Dir(*staticDir))
@@ -432,11 +503,14 @@ func main() {
 
 	mux.HandleFunc("GET /", app.handleHome)
 	mux.HandleFunc("GET /properties", app.handlePropertiesSearch)
+	mux.HandleFunc("GET /readyz", app.handleReadyz)
 	mux.HandleFunc("GET /api/address/suggest", app.handleAddressSuggest)
+	mux.HandleFunc("GET /api/search/suggest", app.handleSearchSuggest)
 	mux.HandleFunc("GET /property/{pid}", app.handlePropertyDetail)
 	mux.HandleFunc("GET /building/{base_pid}", app.handleBuilding)
 	mux.HandleFunc("GET /suburbs", app.handleSuburbAnalytics)
 	mux.HandleFunc("GET /suburbs/losses", app.handleSuburbLosses)
+	mux.HandleFunc("GET /postcode/{code}", app.handlePostcodePage)
 	mux.HandleFunc("GET /submit", app.handleSubmitForm)
 	mux.HandleFunc("POST /submit", app.handleSubmitAction)
 
@@ -452,7 +526,7 @@ func main() {
 
 	// Warm expensive aggregate caches in the background so the first user
 	// does not pay for the full 2.9M-property scan.
-	go app.ensureSuburbStats()
+	go app.ensureMaterializedStats()
 
 	log.Printf("========================================================")
 	log.Printf(" SoldNSW Server listening on http://localhost%s", srv.Addr)
@@ -490,7 +564,7 @@ func sqliteDSN(path string) string {
 // single namespace makes their identically named "title"/"content" defines
 // overwrite each other, so every route would render the last page parsed.
 func parseTemplates(dir string) (map[string]*template.Template, error) {
-	pages := []string{"index.html", "property.html", "suburb.html", "submit.html", "losses.html", "building.html", "404.html"}
+	pages := []string{"index.html", "postcode.html", "property.html", "suburb.html", "submit.html", "losses.html", "building.html", "404.html"}
 	sets := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
 		t, err := template.New("base.html").Funcs(templateFuncs()).ParseFiles(
@@ -511,33 +585,145 @@ func newApp(db *sql.DB, tmpls map[string]*template.Template) (*App, error) {
 		return nil, fmt.Errorf("generate flash key: %w", err)
 	}
 	return &App{
-		db:        db,
-		queries:   database.New(db),
-		templates: tmpls,
-		flashKey:  key,
-		limiter:   newIPRateLimiter(5, time.Minute),
+		db:             db,
+		queries:        database.New(db),
+		templates:      tmpls,
+		flashKey:       key,
+		limiter:        newIPRateLimiter(5, time.Minute),
+		suggestLimiter: newIPRateLimiter(60, time.Minute),
+		suggestCache:   make(map[string]suggestionCacheEntry),
+		statsStatus:    "unknown",
+		statsTimeout:   2 * time.Minute,
 	}, nil
 }
 
-// ensureSuburbStats populates the materialised suburb summary on a fresh
-// database. The /suburbs page shows a "calculating" notice while this runs.
-func (app *App) ensureSuburbStats() {
-	var count int
-	if err := app.db.QueryRow("SELECT COUNT(*) FROM suburb_stats").Scan(&count); err != nil {
-		log.Printf("Suburb stats check failed: %v", err)
+// setStatsStatus records the materialised analytics build state.
+func (app *App) setStatsStatus(status string, buildErr error) {
+	app.statsMu.Lock()
+	defer app.statsMu.Unlock()
+	app.statsStatus = status
+	if buildErr != nil {
+		app.statsError = buildErr.Error()
+	} else {
+		app.statsError = ""
+	}
+	if status == "ready" {
+		app.statsUpdated = time.Now()
+	}
+}
+
+func (app *App) statsSnapshot() (status, updated, lastErr string) {
+	app.statsMu.Lock()
+	defer app.statsMu.Unlock()
+	status = app.statsStatus
+	lastErr = app.statsError
+	if !app.statsUpdated.IsZero() {
+		updated = app.statsUpdated.Format("2 Jan 2006 15:04")
+	}
+	return status, updated, lastErr
+}
+
+// ensureMaterializedStats builds the materialised analytics and suggestion
+// tables in the background. Each attempt has a configurable timeout, and the
+// build is retried with backoff before the status is marked failed.
+func (app *App) ensureMaterializedStats() {
+	ready, err := app.materializedStatsReady()
+	if err != nil {
+		log.Printf("Materialised stats check failed: %v", err)
+		app.setStatsStatus("failed", err)
 		return
 	}
-	if count > 0 {
+	if ready {
+		app.setStatsStatus("ready", nil)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	log.Printf("Building suburb statistics for the first time; this can take a moment on a large dataset...")
-	if err := database.RefreshSuburbStats(ctx, app.db); err != nil {
-		log.Printf("Suburb stats build failed: %v", err)
-		return
+
+	app.setStatsStatus("building", nil)
+	const attempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		timeout := app.statsTimeout
+		if timeout <= 0 {
+			timeout = 2 * time.Minute
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		lastErr = app.rebuildMissingStats(ctx)
+		cancel()
+		if lastErr == nil {
+			log.Printf("Materialised analytics stats ready")
+			app.setStatsStatus("ready", nil)
+			return
+		}
+		log.Printf("Materialised stats build attempt %d/%d failed: %v", attempt, attempts, lastErr)
+		if attempt < attempts {
+			time.Sleep(time.Duration(attempt) * 30 * time.Second)
+		}
 	}
-	log.Printf("Suburb statistics ready")
+	app.setStatsStatus("failed", lastErr)
+}
+
+func (app *App) materializedStatsReady() (bool, error) {
+	for _, table := range []string{"suburb_stats", "street_stats", "postcode_stats"} {
+		var count int64
+		if err := app.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+			return false, fmt.Errorf("count %s: %w", table, err)
+		}
+		if count == 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (app *App) rebuildMissingStats(ctx context.Context) error {
+	var suburbCount, streetCount, postcodeCount int64
+	if err := app.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM suburb_stats").Scan(&suburbCount); err != nil {
+		return fmt.Errorf("count suburb stats: %w", err)
+	}
+	if err := app.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM street_stats").Scan(&streetCount); err != nil {
+		return fmt.Errorf("count street stats: %w", err)
+	}
+	if err := app.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM postcode_stats").Scan(&postcodeCount); err != nil {
+		return fmt.Errorf("count postcode stats: %w", err)
+	}
+	if suburbCount == 0 {
+		log.Printf("Building suburb statistics for the first time; this can take a moment on a large dataset...")
+		if err := database.RefreshSuburbStats(ctx, app.db); err != nil {
+			return err
+		}
+	}
+	if streetCount == 0 {
+		log.Printf("Building street suggestion statistics...")
+		if err := database.RefreshStreetStats(ctx, app.db); err != nil {
+			return err
+		}
+	}
+	if postcodeCount == 0 {
+		log.Printf("Building postcode suggestion statistics...")
+		if err := database.RefreshPostcodeStats(ctx, app.db); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// handleReadyz reports database and materialised-stats readiness.
+func (app *App) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	pingErr := app.db.PingContext(r.Context())
+	status, updated, lastErr := app.statsSnapshot()
+	response := map[string]any{
+		"database":      pingErr == nil,
+		"stats_status":  status,
+		"stats_updated": updated,
+	}
+	if lastErr != "" {
+		response["stats_error"] = lastErr
+	}
+	if pingErr != nil || status == "failed" {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // renderNotFound renders the branded 404 page.
@@ -624,7 +810,15 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
+	data := app.homePageData(r.Context())
+	data.Title = "Australian Property Sales & Suburb Trends"
+	data.Flash = app.readFlash(w, r)
+	app.renderTemplate(w, "index.html", data)
+}
+
+// homePageData loads the statistics and recent sales shared by the search
+// views and the landing page.
+func (app *App) homePageData(ctx context.Context) PageData {
 	recentSales, err := app.queries.ListRecentSalesWithAddress(ctx)
 	if err != nil {
 		log.Printf("Error fetching recent sales: %v", err)
@@ -640,8 +834,7 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 		latestSaleDate = recentSales[0].SettlementDate
 	}
 
-	data := PageData{
-		Title:           "Australian Property Sales & Suburb Trends",
+	return PageData{
 		ActiveNav:       "search",
 		RecentSales:     recentSales,
 		TotalProperties: totalProps,
@@ -649,17 +842,59 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 		TotalSuburbs:    int(totalSuburbs),
 		LatestSaleDate:  latestSaleDate,
 		TopSuburbs:      topSuburbs,
-		Flash:           app.readFlash(w, r),
 	}
+}
 
-	app.renderTemplate(w, "index.html", data)
+// searchPageData is the shared result-page shell for address, street and
+// postcode searches.
+func (app *App) searchPageData(ctx context.Context) PageData {
+	data := app.homePageData(ctx)
+	data.Title = "Search Results - SoldNSW"
+	data.ActiveNav = "search"
+	data.HasSearched = true
+	return data
+}
+
+const maxSearchQueryLength = 120
+const suggestionCacheTTL = time.Minute
+
+type suggestionCacheEntry struct {
+	suggestions []searchSuggestion
+	expires     time.Time
+}
+
+func (app *App) cachedSuggestions(q string) ([]searchSuggestion, bool) {
+	key := strings.ToLower(strings.TrimSpace(q))
+	app.suggestCacheMu.Lock()
+	defer app.suggestCacheMu.Unlock()
+	entry, ok := app.suggestCache[key]
+	if !ok || time.Now().After(entry.expires) {
+		if ok {
+			delete(app.suggestCache, key)
+		}
+		return nil, false
+	}
+	return entry.suggestions, true
+}
+
+func (app *App) cacheSuggestions(q string, suggestions []searchSuggestion) {
+	key := strings.ToLower(strings.TrimSpace(q))
+	app.suggestCacheMu.Lock()
+	defer app.suggestCacheMu.Unlock()
+	if len(app.suggestCache) > 5000 {
+		app.suggestCache = make(map[string]suggestionCacheEntry)
+	}
+	app.suggestCache[key] = suggestionCacheEntry{
+		suggestions: suggestions,
+		expires:     time.Now().Add(suggestionCacheTTL),
+	}
 }
 
 // handleAddressSuggest returns autocomplete matches for the homepage search box.
 func (app *App) handleAddressSuggest(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if len([]rune(q)) < 2 {
+	if len([]rune(q)) < 2 || len([]rune(q)) > maxSearchQueryLength {
 		_, _ = w.Write([]byte("[]"))
 		return
 	}
@@ -673,6 +908,626 @@ func (app *App) handleAddressSuggest(w http.ResponseWriter, r *http.Request) {
 		matches = []database.AddressMatch{}
 	}
 	_ = json.NewEncoder(w).Encode(matches)
+}
+
+// searchSuggestion is a typed autocomplete entry for the homepage search box.
+type searchSuggestion struct {
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	Value string `json:"value"`
+	PID   string `json:"pid,omitempty"`
+}
+
+// handleSearchSuggest returns addresses, streets and postcodes that match the
+// current query. The legacy address-only endpoint remains available.
+func (app *App) handleSearchSuggest(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if len([]rune(q)) < 2 || len([]rune(q)) > maxSearchQueryLength {
+		_, _ = w.Write([]byte("[]"))
+		return
+	}
+	if app.suggestLimiter != nil && !app.suggestLimiter.allow(clientIP(r)) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode([]searchSuggestion{})
+		return
+	}
+	if cached, ok := app.cachedSuggestions(q); ok {
+		_ = json.NewEncoder(w).Encode(cached)
+		return
+	}
+
+	ctx := r.Context()
+	parsed := database.ParseSearchQuery(q)
+	suggestions := make([]searchSuggestion, 0, 10)
+	postcodeSuggestions := make([]searchSuggestion, 0, 3)
+	streetSuggestions := make([]searchSuggestion, 0, 5)
+	suburbSuggestions := make([]searchSuggestion, 0, 3)
+	addressSuggestions := make([]searchSuggestion, 0, 5)
+	propertySuggestions := make([]searchSuggestion, 0, 1)
+
+	if parsed.Kind == database.SearchKindPropertyID {
+		prop, err := app.queries.GetPropertyByPID(ctx, parsed.PropertyID)
+		if err == nil {
+			propertySuggestions = append(propertySuggestions, searchSuggestion{
+				Kind:  "property",
+				Label: fmt.Sprintf("%s, %s %s", propertyAddress(prop), prop.Suburb, prop.State),
+				Value: "/property/" + url.PathEscape(prop.GnafPid),
+				PID:   prop.GnafPid,
+			})
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("Property suggestion error: %v", err)
+		}
+		app.cacheSuggestions(q, propertySuggestions)
+		_ = json.NewEncoder(w).Encode(propertySuggestions)
+		return
+	}
+
+	numericPrefix := len(q) >= 3 && len(q) <= 4 && allDigits(q)
+	if numericPrefix {
+		rows, err := app.queries.SuggestPostcodeStats(ctx, database.SuggestPostcodeStatsParams{
+			PostcodePattern: q + "%",
+			ExactPostcode:   q,
+			RowLimit:        3,
+		})
+		if err != nil {
+			log.Printf("Postcode suggestion error: %v", err)
+		}
+		for _, row := range rows {
+			label := row.Postcode
+			if row.SampleSuburb != "" {
+				label += " — " + row.SampleSuburb
+			}
+			label += fmt.Sprintf(" (%s)", propertyCountLabel(row.PropertyCount))
+			postcodeSuggestions = append(postcodeSuggestions, searchSuggestion{
+				Kind:  "postcode",
+				Label: label,
+				Value: "/postcode/" + row.Postcode,
+			})
+		}
+		if len(rows) == 0 {
+			fallback, fallbackErr := app.queries.SuggestPostcodes(ctx, database.SuggestPostcodesParams{
+				PostcodePattern: q + "%",
+				RowLimit:        3,
+			})
+			if fallbackErr != nil {
+				log.Printf("Postcode suggestion fallback error: %v", fallbackErr)
+			}
+			for _, row := range fallback {
+				suburb, _ := row.SampleSuburb.(string)
+				label := row.Postcode
+				if suburb != "" {
+					label += " — " + suburb
+				}
+				label += fmt.Sprintf(" (%s)", propertyCountLabel(row.PropertyCount))
+				postcodeSuggestions = append(postcodeSuggestions, searchSuggestion{
+					Kind:  "postcode",
+					Label: label,
+					Value: "/postcode/" + row.Postcode,
+				})
+			}
+		}
+	}
+
+	pattern := parsed.StreetPattern
+	if pattern == "" && parsed.StreetName != "" {
+		pattern = parsed.StreetName + "%"
+	}
+	if pattern != "" && pattern != "%" && len(parsed.StreetName) >= 3 {
+		rows, err := app.queries.SuggestStreetStats(ctx, database.SuggestStreetStatsParams{
+			StreetPattern: pattern,
+			ExactStreet:   parsed.StreetName,
+			RowLimit:      5,
+		})
+		if err != nil {
+			log.Printf("Street suggestion error: %v", err)
+		}
+		for _, row := range rows {
+			streetSuggestions = append(streetSuggestions, searchSuggestion{
+				Kind:  "street",
+				Label: fmt.Sprintf("%s %s, %s %s %s (%s)", row.StreetName, row.StreetType, row.Suburb, row.State, row.Postcode, propertyCountLabel(row.PropertyCount)),
+				Value: buildStreetURL(row.StreetName, row.StreetType, row.Suburb, row.State, row.Postcode),
+			})
+		}
+		if len(rows) == 0 {
+			fallback, fallbackErr := app.queries.SuggestStreetGroups(ctx, database.SuggestStreetGroupsParams{
+				StreetPattern: pattern,
+				RowLimit:      5,
+			})
+			if fallbackErr != nil {
+				log.Printf("Street suggestion fallback error: %v", fallbackErr)
+			}
+			for _, row := range fallback {
+				streetSuggestions = append(streetSuggestions, searchSuggestion{
+					Kind:  "street",
+					Label: fmt.Sprintf("%s %s, %s %s %s (%s)", row.StreetName, row.StreetType, row.Suburb, row.State, row.Postcode, propertyCountLabel(row.PropertyCount)),
+					Value: buildStreetURL(row.StreetName, row.StreetType, row.Suburb, row.State, row.Postcode),
+				})
+			}
+		}
+	}
+
+	// Suburb suggestions help with names that also look like street prefixes.
+	if !numericPrefix {
+		fields := strings.Fields(strings.ToUpper(q))
+		if len(fields) > 0 && !allDigits(fields[0]) && len(fields[0]) >= 3 {
+			rows, err := app.queries.SuggestSuburbs(ctx, database.SuggestSuburbsParams{
+				SuburbPattern: fields[0] + "%",
+				ExactSuburb:   fields[0],
+				RowLimit:      3,
+			})
+			if err != nil {
+				log.Printf("Suburb suggestion error: %v", err)
+			}
+			for _, row := range rows {
+				suburbSuggestions = append(suburbSuggestions, searchSuggestion{
+					Kind:  "suburb",
+					Label: fmt.Sprintf("%s, %s (%s, %d sales)", row.Suburb, row.State, propertyCountLabel(row.PropertyCount), row.SalesCount),
+					Value: suburbSearchURL(row.Suburb, row.State),
+				})
+			}
+		}
+	}
+
+	// Pure postcode searches do not need address rows.
+	if !numericPrefix && (parsed.Kind != database.SearchKindPostcode || parsed.StreetName != "") {
+		matches, err := database.SearchAddressFTS(ctx, app.db, q, 5)
+		if err != nil {
+			log.Printf("Address suggestion error: %v", err)
+		}
+		for _, match := range matches {
+			addressSuggestions = append(addressSuggestions, searchSuggestion{
+				Kind:  "address",
+				Label: match.Address,
+				Value: "/property/" + url.PathEscape(match.GnafPID),
+				PID:   match.GnafPID,
+			})
+		}
+	}
+
+	if numericPrefix {
+		suggestions = append(suggestions, postcodeSuggestions...)
+		suggestions = append(suggestions, streetSuggestions...)
+	} else {
+		switch parsed.Kind {
+		case database.SearchKindPostcode:
+			suggestions = append(suggestions, postcodeSuggestions...)
+			suggestions = append(suggestions, suburbSuggestions...)
+			suggestions = append(suggestions, streetSuggestions...)
+		case database.SearchKindAddress:
+			suggestions = append(suggestions, addressSuggestions...)
+			suggestions = append(suggestions, streetSuggestions...)
+			suggestions = append(suggestions, suburbSuggestions...)
+			suggestions = append(suggestions, postcodeSuggestions...)
+		default:
+			suggestions = append(suggestions, streetSuggestions...)
+			suggestions = append(suggestions, suburbSuggestions...)
+			suggestions = append(suggestions, addressSuggestions...)
+			suggestions = append(suggestions, postcodeSuggestions...)
+		}
+	}
+	if len(suggestions) > 10 {
+		suggestions = suggestions[:10]
+	}
+	app.cacheSuggestions(q, suggestions)
+	_ = json.NewEncoder(w).Encode(suggestions)
+}
+
+// streetSearchURL builds the canonical link for the properties on one street.
+func streetSearchURL(row database.SearchStreetGroupsRow) string {
+	return buildStreetURL(row.StreetName, row.StreetType, row.Suburb, row.State, row.Postcode)
+}
+
+func suburbSearchURL(suburb, state string) string {
+	values := url.Values{}
+	values.Set("suburb", suburb)
+	values.Set("state", state)
+	return "/suburbs?" + values.Encode()
+}
+
+func buildStreetURL(name, streetType, suburb, state, postcode string) string {
+	values := url.Values{}
+	values.Set("street", name)
+	values.Set("street_type", streetType)
+	values.Set("suburb", suburb)
+	values.Set("state", state)
+	values.Set("postcode", postcode)
+	values.Set("view", "street")
+	return "/properties?" + values.Encode()
+}
+
+func propertyCountLabel(count int64) string {
+	if count == 1 {
+		return "1 property"
+	}
+	return fmt.Sprintf("%d properties", count)
+}
+
+func allDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// queryParams returns sorted, rendered query parameters excluding the named
+// keys. It is used for filter forms and pager links.
+func queryParams(values url.Values, exclude ...string) []QueryParam {
+	skip := make(map[string]bool, len(exclude))
+	for _, name := range exclude {
+		skip[name] = true
+	}
+	params := make([]QueryParam, 0, len(values))
+	for name, items := range values {
+		if skip[name] {
+			continue
+		}
+		for _, value := range items {
+			if value == "" {
+				continue
+			}
+			params = append(params, QueryParam{Name: name, Value: value})
+		}
+	}
+	sort.Slice(params, func(i, j int) bool {
+		if params[i].Name == params[j].Name {
+			return params[i].Value < params[j].Value
+		}
+		return params[i].Name < params[j].Name
+	})
+	return params
+}
+
+// pagerBaseURL returns a URL ending in '?' or '&amp;' so templates can append
+// "page=N".
+func pagerBaseURL(path string, values url.Values) string {
+	encoded := values.Encode()
+	if encoded == "" {
+		return path + "?"
+	}
+	return path + "?" + encoded + "&"
+}
+
+func resultSort(value, fallback string, allowRelevance bool) string {
+	switch value {
+	case "street", "latest", "price":
+		return value
+	case "relevance":
+		if allowRelevance {
+			return value
+		}
+	}
+	return fallback
+}
+
+func onlyWithSalesParam(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "on", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeDwellingType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "house", "unit", "townhouse":
+		return strings.ToLower(strings.TrimSpace(value))
+	case "other":
+		return "other"
+	default:
+		return ""
+	}
+}
+
+// renderSearchError renders a search page with a service-unavailable notice.
+func (app *App) renderSearchError(w http.ResponseWriter, r *http.Request, templateName, title, message string) {
+	app.renderSearchErrorStatus(w, r, templateName, title, message, http.StatusServiceUnavailable)
+}
+
+func (app *App) renderSearchErrorStatus(w http.ResponseWriter, r *http.Request, templateName, title, message string, status int) {
+	data := app.searchPageData(r.Context())
+	data.Title = title
+	data.SearchMode = "error"
+	data.SearchError = message
+	data.Flash = app.readFlash(w, r)
+	app.renderTemplateStatus(w, templateName, data, status)
+}
+
+// setSearchPagination populates the shared pager fields for a result set.
+func setSearchPagination(data *PageData, page int, total int64, pageSize int) {
+	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	data.Page = page
+	data.TotalPages = totalPages
+	data.ResultTotal = total
+	data.HasPrev = page > 1
+	data.HasNext = page < totalPages
+	data.PrevPage = page - 1
+	data.NextPage = page + 1
+	if page > 1 {
+		data.PrevPage = page - 1
+	}
+	if total == 0 {
+		data.ShowingFrom = 0
+		data.ShowingTo = 0
+		return
+	}
+	data.ShowingFrom = (page-1)*pageSize + 1
+	data.ShowingTo = page * pageSize
+	if int64(data.ShowingTo) > total {
+		data.ShowingTo = int(total)
+	}
+}
+
+// findStreetGroupsPage resolves a parsed street query to one page of matching
+// streets and the total group count.
+func (app *App) findStreetGroupsPage(ctx context.Context, parsed database.ParsedSearch, page, pageSize int) ([]database.SearchStreetGroupsRow, int64, error) {
+	pattern := parsed.StreetPattern
+	if pattern == "" && parsed.StreetName != "" {
+		pattern = parsed.StreetName + "%"
+	}
+	if len(parsed.StreetName) < 2 || pattern == "" || pattern == "%" {
+		return nil, 0, nil
+	}
+	params := database.SearchStreetGroupsParams{
+		StreetPattern: pattern,
+		ExactStreet:   parsed.StreetName,
+		StreetType:    parsed.StreetType,
+		Suburb:        parsed.Suburb,
+		State:         parsed.State,
+		Postcode:      parsed.Postcode,
+	}
+	total, err := app.queries.CountStreetGroups(ctx, database.CountStreetGroupsParams{
+		StreetPattern: params.StreetPattern,
+		StreetType:    params.StreetType,
+		Suburb:        params.Suburb,
+		State:         params.State,
+		Postcode:      params.Postcode,
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page < 1 {
+		page = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	params.RowOffset = int64((page - 1) * pageSize)
+	params.RowLimit = int64(pageSize)
+	groups, err := app.queries.SearchStreetGroups(ctx, params)
+	if err != nil {
+		return nil, 0, err
+	}
+	return groups, total, nil
+}
+
+// streetGroupsMatchName prevents a single-token suburb such as KILLARA from
+// being treated as a street just because a different street (KILLARNEY) shares
+// the prefix. Prefix-only matches still work through the advanced form.
+func streetGroupsMatchName(groups []database.SearchStreetGroupsRow, streetName string) bool {
+	for _, group := range groups {
+		if strings.EqualFold(group.StreetName, streetName) {
+			return true
+		}
+	}
+	return false
+}
+
+// renderStreetGroups displays one page of matching streets for a street query.
+func (app *App) renderStreetGroups(w http.ResponseWriter, r *http.Request, address string, groups []database.SearchStreetGroupsRow, total int64, page int, flash *FlashMessage) {
+	data := app.searchPageData(r.Context())
+	data.Title = "Street Search Results - SoldNSW"
+	data.SearchMode = "street"
+	data.QueryAddress = address
+	data.StreetMatches = groups
+	data.Flash = flash
+	setSearchPagination(&data, page, total, suburbSalesPageSize)
+	values := r.URL.Query()
+	values.Del("page")
+	data.PagerBaseURL = pagerBaseURL("/properties", values)
+	app.renderTemplate(w, "index.html", data)
+}
+
+// renderStreetProperties displays every property on one selected street.
+func (app *App) renderStreetProperties(w http.ResponseWriter, r *http.Request, group database.SearchStreetGroupsRow, page int, flash *FlashMessage) {
+	ctx := r.Context()
+	query := r.URL.Query()
+	dwellingType := normalizeDwellingType(query.Get("dwelling"))
+	sortValue := resultSort(strings.ToLower(strings.TrimSpace(query.Get("sort"))), "street", false)
+	onlyWithSales := onlyWithSalesParam(query.Get("only_with_sales"))
+
+	data := app.searchPageData(ctx)
+	data.Title = fmt.Sprintf("%s %s, %s - SoldNSW", group.StreetName, group.StreetType, group.Suburb)
+	data.SearchMode = "street-properties"
+	data.QueryStreet = group.StreetName
+	data.QueryStreetType = group.StreetType
+	data.QuerySuburb = group.Suburb
+	data.QueryState = group.State
+	data.QueryPostcode = group.Postcode
+	data.QueryDwellingType = dwellingType
+	data.QuerySort = sortValue
+	data.QueryOnlyWithSales = onlyWithSales
+	data.Flash = flash
+
+	summary, err := app.queries.GetStreetSummary(ctx, database.GetStreetSummaryParams{
+		StreetName: group.StreetName,
+		StreetType: group.StreetType,
+		Suburb:     group.Suburb,
+		State:      group.State,
+		Postcode:   group.Postcode,
+	})
+	if err != nil {
+		log.Printf("Street summary error: %v", err)
+	} else {
+		data.StreetSummary = &summary
+	}
+
+	total, err := app.queries.CountStreetProperties(ctx, database.CountStreetPropertiesParams{
+		StreetName:    group.StreetName,
+		StreetType:    group.StreetType,
+		Suburb:        group.Suburb,
+		State:         group.State,
+		Postcode:      group.Postcode,
+		DwellingType:  dwellingType,
+		OnlyWithSales: boolToInt64(onlyWithSales),
+	})
+	if err != nil {
+		log.Printf("Street property count error: %v", err)
+		app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Street search is temporarily unavailable. Please try again.")
+		return
+	}
+	setSearchPagination(&data, page, total, suburbSalesPageSize)
+	props, err := app.queries.ListStreetProperties(ctx, database.ListStreetPropertiesParams{
+		StreetName:    group.StreetName,
+		StreetType:    group.StreetType,
+		Suburb:        group.Suburb,
+		State:         group.State,
+		Postcode:      group.Postcode,
+		DwellingType:  dwellingType,
+		OnlyWithSales: boolToInt64(onlyWithSales),
+		Sort:          sortValue,
+		RowOffset:     int64((data.Page - 1) * suburbSalesPageSize),
+		RowLimit:      suburbSalesPageSize,
+	})
+	if err != nil {
+		log.Printf("Street property list error: %v", err)
+		app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Street search is temporarily unavailable. Please try again.")
+		return
+	}
+	data.Properties = props
+
+	pagerValues := url.Values{}
+	pagerValues.Set("street", group.StreetName)
+	pagerValues.Set("street_type", group.StreetType)
+	pagerValues.Set("suburb", group.Suburb)
+	pagerValues.Set("state", group.State)
+	pagerValues.Set("postcode", group.Postcode)
+	pagerValues.Set("view", "street")
+	if dwellingType != "" {
+		pagerValues.Set("dwelling", dwellingType)
+	}
+	if sortValue != "street" {
+		pagerValues.Set("sort", sortValue)
+	}
+	if onlyWithSales {
+		pagerValues.Set("only_with_sales", "1")
+	}
+	data.PagerBaseURL = pagerBaseURL("/properties", pagerValues)
+	data.FilterAction = "/properties"
+	data.FilterParams = queryParams(pagerValues, "dwelling", "sort", "only_with_sales")
+	app.renderTemplate(w, "index.html", data)
+}
+
+func boolToInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+// handlePostcodePage renders the postcode overview page.
+func (app *App) handlePostcodePage(w http.ResponseWriter, r *http.Request) {
+	postcode := strings.TrimSpace(r.PathValue("code"))
+	if !validPostcode(postcode) {
+		app.renderNotFound(w, r)
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	app.renderPostcodePage(w, r, postcode, page, app.readFlash(w, r))
+}
+
+// renderPostcodePage renders the postcode summary, suburb breakdown and its
+// paginated property records.
+func (app *App) renderPostcodePage(w http.ResponseWriter, r *http.Request, postcode string, page int, flash *FlashMessage) {
+	ctx := r.Context()
+	query := r.URL.Query()
+	dwellingType := normalizeDwellingType(query.Get("dwelling"))
+	sortValue := resultSort(strings.ToLower(strings.TrimSpace(query.Get("sort"))), "street", false)
+	onlyWithSales := onlyWithSalesParam(query.Get("only_with_sales"))
+
+	data := app.searchPageData(ctx)
+	data.Title = "Postcode " + postcode + " - SoldNSW"
+	data.SearchMode = "postcode"
+	data.QueryPostcode = postcode
+	data.QueryDwellingType = dwellingType
+	data.QuerySort = sortValue
+	data.QueryOnlyWithSales = onlyWithSales
+	data.Flash = flash
+
+	summary, err := app.queries.GetPostcodeSummary(ctx, postcode)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		log.Printf("Postcode summary error for %s: %v", postcode, err)
+		app.renderPostcodeError(w, r, postcode, "Postcode unavailable - SoldNSW", "Postcode data is temporarily unavailable. Please try again.")
+		return
+	}
+	data.PostcodeSummary = &summary
+	suburbs, err := app.queries.GetPostcodeSuburbs(ctx, postcode)
+	if err != nil {
+		log.Printf("Postcode suburb list error for %s: %v", postcode, err)
+		app.renderPostcodeError(w, r, postcode, "Postcode unavailable - SoldNSW", "Postcode data is temporarily unavailable. Please try again.")
+		return
+	}
+	data.PostcodeSuburbs = suburbs
+
+	total, err := app.queries.CountPostcodeProperties(ctx, database.CountPostcodePropertiesParams{
+		Postcode:      postcode,
+		DwellingType:  dwellingType,
+		OnlyWithSales: boolToInt64(onlyWithSales),
+	})
+	if err != nil {
+		log.Printf("Postcode property count error for %s: %v", postcode, err)
+		app.renderPostcodeError(w, r, postcode, "Postcode unavailable - SoldNSW", "Postcode data is temporarily unavailable. Please try again.")
+		return
+	}
+	setSearchPagination(&data, page, total, suburbSalesPageSize)
+	props, err := app.queries.ListPostcodeProperties(ctx, database.ListPostcodePropertiesParams{
+		Postcode:      postcode,
+		DwellingType:  dwellingType,
+		OnlyWithSales: boolToInt64(onlyWithSales),
+		Sort:          sortValue,
+		RowOffset:     int64((data.Page - 1) * suburbSalesPageSize),
+		RowLimit:      suburbSalesPageSize,
+	})
+	if err != nil {
+		log.Printf("Postcode property list error for %s: %v", postcode, err)
+		app.renderPostcodeError(w, r, postcode, "Postcode unavailable - SoldNSW", "Postcode data is temporarily unavailable. Please try again.")
+		return
+	}
+	data.Properties = props
+
+	pagerValues := url.Values{}
+	if dwellingType != "" {
+		pagerValues.Set("dwelling", dwellingType)
+	}
+	if sortValue != "street" {
+		pagerValues.Set("sort", sortValue)
+	}
+	if onlyWithSales {
+		pagerValues.Set("only_with_sales", "1")
+	}
+	data.PagerBaseURL = pagerBaseURL("/postcode/"+postcode, pagerValues)
+	data.FilterAction = "/postcode/" + postcode
+	data.FilterParams = queryParams(pagerValues, "dwelling", "sort", "only_with_sales")
+	app.renderTemplate(w, "postcode.html", data)
 }
 
 func validPostcode(value string) bool {
@@ -696,74 +1551,156 @@ func normalizedStreetNumber(value string) string {
 func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	address := strings.TrimSpace(r.URL.Query().Get("address"))
+	if len([]rune(address)) > maxSearchQueryLength {
+		app.renderSearchErrorStatus(w, r, "index.html", "Search query too long - SoldNSW", "Search queries must be 120 characters or fewer.", http.StatusBadRequest)
+		return
+	}
 	suburb := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("suburb")))
 	street := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("street")))
+	streetType := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("street_type")))
 	number := normalizedStreetNumber(r.URL.Query().Get("number"))
 	state := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("state")))
 	postcode := strings.TrimSpace(r.URL.Query().Get("postcode"))
+	view := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("view")))
 	dwellingType := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("dwelling")))
 	switch dwellingType {
 	case "house", "unit", "townhouse", "other":
 	default:
 		dwellingType = ""
 	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	flash := app.readFlash(w, r)
 
 	if address != "" {
-		matches, err := database.SearchAddressFTS(ctx, app.db, address, 50)
-		if err != nil {
-			log.Printf("Address search error for %q: %v", address, err)
+		parsed := database.ParseSearchQuery(address)
+
+		if parsed.Kind == database.SearchKindPropertyID {
+			prop, err := app.queries.GetPropertyByPID(ctx, parsed.PropertyID)
+			if err == nil {
+				http.Redirect(w, r, "/property/"+prop.GnafPid, http.StatusSeeOther)
+				return
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				log.Printf("Property ID search error for %q: %v", parsed.PropertyID, err)
+				app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Property ID lookup is temporarily unavailable. Please try again.")
+				return
+			}
+			data := app.searchPageData(ctx)
+			data.Title = "Property ID not found - SoldNSW"
+			data.SearchMode = "address"
+			data.QueryAddress = address
+			data.QuerySort = "relevance"
+			data.SearchError = fmt.Sprintf("Property ID %s was not found.", parsed.PropertyID)
+			data.Flash = flash
+			app.renderTemplateStatus(w, "index.html", data, http.StatusNotFound)
+			return
 		}
-		normalizedAddress := strings.Join(strings.Fields(strings.ToUpper(address)), " ")
-		for _, match := range matches {
-			if strings.Join(strings.Fields(match.Address), " ") == normalizedAddress {
-				http.Redirect(w, r, "/property/"+match.GnafPID, http.StatusSeeOther)
+
+		if parsed.Kind == database.SearchKindPostcode {
+			app.renderPostcodePage(w, r, parsed.Postcode, page, flash)
+			return
+		}
+
+		if parsed.Kind == database.SearchKindStreet {
+			groups, total, err := app.findStreetGroupsPage(ctx, parsed, page, suburbSalesPageSize)
+			if err != nil {
+				log.Printf("Street search error for %q: %v", address, err)
+				app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Street search is temporarily unavailable. Please try again.")
+				return
+			}
+			if total > 0 && (page > 1 || streetGroupsMatchName(groups, parsed.StreetName)) {
+				app.renderStreetGroups(w, r, address, groups, total, page, flash)
 				return
 			}
 		}
-		if len(matches) == 1 {
-			http.Redirect(w, r, "/property/"+matches[0].GnafPID, http.StatusSeeOther)
+
+		// Fall back to the address FTS index when the query is a full address
+		// or a street prefix did not resolve.
+		addressSort := resultSort(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort"))), "relevance", true)
+		onlyWithSales := onlyWithSalesParam(r.URL.Query().Get("only_with_sales"))
+		opts := database.AddressPropertySearchOptions{
+			Query:         address,
+			DwellingType:  dwellingType,
+			OnlyWithSales: onlyWithSales,
+			Sort:          addressSort,
+		}
+		total, err := database.CountAddressProperties(ctx, app.db, opts)
+		if err != nil {
+			log.Printf("Address search count error for %q: %v", address, err)
+			app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Address search is temporarily unavailable. Please try again.")
 			return
 		}
-		props := make([]database.GnafProperty, 0, len(matches))
-		for _, match := range matches {
-			prop, err := app.queries.GetPropertyByPID(ctx, match.GnafPID)
-			if err != nil {
-				continue
+
+		// Preserve the direct-to-property behaviour for exact addresses and
+		// single results.
+		if dwellingType == "" && !onlyWithSales {
+			matches, ftsErr := database.SearchAddressFTS(ctx, app.db, address, 50)
+			if ftsErr != nil {
+				log.Printf("Address search error for %q: %v", address, ftsErr)
+				app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Address search is temporarily unavailable. Please try again.")
+				return
 			}
-			if dwellingType != "" {
-				if dwellingType == "other" {
-					if prop.DwellingType != "other" && prop.DwellingType != "unknown" {
-						continue
-					}
-				} else if prop.DwellingType != dwellingType {
-					continue
+			normalizedAddress := strings.Join(strings.Fields(strings.ToUpper(address)), " ")
+			for _, match := range matches {
+				if strings.Join(strings.Fields(match.Address), " ") == normalizedAddress {
+					http.Redirect(w, r, "/property/"+match.GnafPID, http.StatusSeeOther)
+					return
 				}
 			}
-			props = append(props, prop)
 		}
-		recentSales, _ := app.queries.ListRecentSalesWithAddress(ctx)
-		totalProps, _ := app.queries.GetTotalPropertiesCount(ctx)
-		totalSales, _ := app.queries.GetTotalSalesCount(ctx)
-		totalSuburbs, _ := database.CountSuburbs(ctx, app.db)
-		latestSaleDate := ""
-		if len(recentSales) > 0 {
-			latestSaleDate = recentSales[0].SettlementDate
+		if total == 1 {
+			props, err := database.SearchAddressProperties(ctx, app.db, database.AddressPropertySearchOptions{
+				Query:         address,
+				DwellingType:  dwellingType,
+				OnlyWithSales: onlyWithSales,
+				Sort:          addressSort,
+				Limit:         1,
+			})
+			if err == nil && len(props) == 1 {
+				http.Redirect(w, r, "/property/"+props[0].GnafPid, http.StatusSeeOther)
+				return
+			}
 		}
-		data := PageData{
-			Title:             "Address Search Results - SoldNSW",
-			ActiveNav:         "search",
-			QueryAddress:      address,
-			QueryDwellingType: dwellingType,
-			HasSearched:       true,
-			Properties:        props,
-			RecentSales:       recentSales,
-			TotalProperties:   totalProps,
-			TotalSales:        totalSales,
-			TotalSuburbs:      int(totalSuburbs),
-			LatestSaleDate:    latestSaleDate,
-			Flash:             flash,
+
+		data := app.searchPageData(ctx)
+		data.Title = "Address Search Results - SoldNSW"
+		data.SearchMode = "address"
+		data.QueryAddress = address
+		data.QueryDwellingType = dwellingType
+		data.QuerySort = addressSort
+		data.QueryOnlyWithSales = onlyWithSales
+		data.AllowRelevanceSort = true
+		data.Flash = flash
+		setSearchPagination(&data, page, total, suburbSalesPageSize)
+		props, err := database.SearchAddressProperties(ctx, app.db, database.AddressPropertySearchOptions{
+			Query:         address,
+			DwellingType:  dwellingType,
+			OnlyWithSales: onlyWithSales,
+			Sort:          addressSort,
+			Limit:         suburbSalesPageSize,
+			Offset:        (data.Page - 1) * suburbSalesPageSize,
+		})
+		if err != nil {
+			log.Printf("Address search error for %q: %v", address, err)
+			app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Address search is temporarily unavailable. Please try again.")
+			return
 		}
+		data.Properties = props
+
+		pagerValues := url.Values{}
+		pagerValues.Set("address", address)
+		if dwellingType != "" {
+			pagerValues.Set("dwelling", dwellingType)
+		}
+		if addressSort != "relevance" {
+			pagerValues.Set("sort", addressSort)
+		}
+		if onlyWithSales {
+			pagerValues.Set("only_with_sales", "1")
+		}
+		data.PagerBaseURL = pagerBaseURL("/properties", pagerValues)
+		data.FilterAction = "/properties"
+		data.FilterParams = queryParams(pagerValues, "dwelling", "sort", "only_with_sales")
 		app.renderTemplate(w, "index.html", data)
 		return
 	}
@@ -777,38 +1714,72 @@ func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 		flash = &FlashMessage{Type: "warning", Message: "Postcode must be four digits."}
 	}
 
+	if postcode != "" && street == "" && suburb == "" && state == "" && number == "" {
+		app.renderPostcodePage(w, r, postcode, page, flash)
+		return
+	}
+
 	if suburb == "" && street == "" && state == "" && postcode == "" {
 		if flash != nil {
-			recentSales, _ := app.queries.ListRecentSalesWithAddress(ctx)
-			totalProps, _ := app.queries.GetTotalPropertiesCount(ctx)
-			totalSales, _ := app.queries.GetTotalSalesCount(ctx)
-			totalSuburbs, _ := database.CountSuburbs(ctx, app.db)
-			topSuburbs, _ := app.queries.GetTopSuburbs(ctx, 8)
-			latestSaleDate := ""
-			if len(recentSales) > 0 {
-				latestSaleDate = recentSales[0].SettlementDate
-			}
-			app.renderTemplate(w, "index.html", PageData{
-				Title:           "NSW Property Sales & Suburb Trends - SoldNSW",
-				ActiveNav:       "search",
-				RecentSales:     recentSales,
-				TotalProperties: totalProps,
-				TotalSales:      totalSales,
-				TotalSuburbs:    int(totalSuburbs),
-				LatestSaleDate:  latestSaleDate,
-				TopSuburbs:      topSuburbs,
-				Flash:           flash,
-			})
+			data := app.homePageData(ctx)
+			data.Title = "NSW Property Sales & Suburb Trends - SoldNSW"
+			data.Flash = flash
+			app.renderTemplate(w, "index.html", data)
 			return
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 
-	// SearchPropertiesFlexible handles every combination of address fields.
+	parsed := database.ParseStructuredSearch(street, streetType, suburb, state, postcode, number)
+
+	// A street selected from the grouped results carries the full tuple, so we
+	// can list every property on it rather than showing the street again.
+	exactStreetSelection := view == "street" && streetType != "" && suburb != "" && state != "" && postcode != ""
+	if exactStreetSelection {
+		app.renderStreetProperties(w, r, database.SearchStreetGroupsRow{
+			StreetName: street,
+			StreetType: streetType,
+			Suburb:     suburb,
+			State:      state,
+			Postcode:   postcode,
+		}, page, flash)
+		return
+	}
+
+	if street != "" && number == "" {
+		groups, total, err := app.findStreetGroupsPage(ctx, parsed, page, suburbSalesPageSize)
+		if err != nil {
+			log.Printf("Street search error for street %q: %v", street, err)
+			app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Street search is temporarily unavailable. Please try again.")
+			return
+		}
+		if total > 0 {
+			if total == 1 && groups[0].PropertyCount == 1 {
+				props, err := app.queries.ListStreetProperties(ctx, database.ListStreetPropertiesParams{
+					StreetName: groups[0].StreetName,
+					StreetType: groups[0].StreetType,
+					Suburb:     groups[0].Suburb,
+					State:      groups[0].State,
+					Postcode:   groups[0].Postcode,
+					RowOffset:  0,
+					RowLimit:   1,
+				})
+				if err == nil && len(props) == 1 {
+					http.Redirect(w, r, "/property/"+props[0].GnafPid, http.StatusSeeOther)
+					return
+				}
+			}
+			app.renderStreetGroups(w, r, "", groups, total, page, flash)
+			return
+		}
+	}
+
+	// SearchPropertiesFlexible handles the remaining structured combinations,
+	// including number + street lookups.
 	streetPattern := "%"
-	if street != "" {
-		streetPattern = street + "%"
+	if parsed.StreetPattern != "" {
+		streetPattern = parsed.StreetPattern
 	}
 	numberPattern := "%"
 	numberExact := ""
@@ -816,6 +1787,8 @@ func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 		numberPattern = number + "%"
 		numberExact = number
 	}
+	structuredSort := resultSort(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort"))), "street", false)
+	onlyWithSales := onlyWithSalesParam(r.URL.Query().Get("only_with_sales"))
 	props, err := app.queries.SearchPropertiesFlexible(ctx, database.SearchPropertiesFlexibleParams{
 		Suburb:        suburb,
 		StreetPattern: streetPattern,
@@ -824,9 +1797,13 @@ func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 		NumberPattern: numberPattern,
 		NumberExact:   numberExact,
 		DwellingType:  dwellingType,
+		OnlyWithSales: boolToInt64(onlyWithSales),
+		Sort:          structuredSort,
 	})
 	if err != nil {
 		log.Printf("Search error for suburb '%s', street '%s', number '%s', postcode '%s': %v", suburb, street, number, postcode, err)
+		app.renderSearchError(w, r, "index.html", "Search unavailable - SoldNSW", "Property search is temporarily unavailable. Please try again.")
+		return
 	}
 
 	exactNumberMatch := len(props) > 0 && number != "" && (suburb != "" || postcode != "") &&
@@ -836,35 +1813,37 @@ func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recentSales, _ := app.queries.ListRecentSalesWithAddress(ctx)
-	totalProps, _ := app.queries.GetTotalPropertiesCount(ctx)
-	totalSales, _ := app.queries.GetTotalSalesCount(ctx)
-	totalSuburbs, _ := database.CountSuburbs(ctx, app.db)
-
-	latestSaleDate := ""
-	if len(recentSales) > 0 {
-		latestSaleDate = recentSales[0].SettlementDate
+	data := app.searchPageData(ctx)
+	data.SearchMode = "address"
+	data.QuerySuburb = suburb
+	data.QueryStreet = street
+	data.QueryStreetType = streetType
+	data.QueryNumber = number
+	data.QueryState = state
+	data.QueryPostcode = postcode
+	data.QueryDwellingType = dwellingType
+	data.QuerySort = structuredSort
+	data.QueryOnlyWithSales = onlyWithSales
+	data.Properties = props
+	data.ResultTotal = int64(len(props))
+	data.Flash = flash
+	filterValues := url.Values{}
+	for _, name := range []string{"street", "street_type", "suburb", "state", "postcode", "number"} {
+		if value := r.URL.Query().Get(name); value != "" {
+			filterValues.Set(name, value)
+		}
 	}
-
-	data := PageData{
-		Title:             "Search Results - SoldNSW",
-		ActiveNav:         "search",
-		QuerySuburb:       suburb,
-		QueryStreet:       street,
-		QueryNumber:       number,
-		QueryState:        state,
-		QueryPostcode:     postcode,
-		QueryDwellingType: dwellingType,
-		HasSearched:       true,
-		Properties:        props,
-		RecentSales:       recentSales,
-		TotalProperties:   totalProps,
-		TotalSales:        totalSales,
-		TotalSuburbs:      int(totalSuburbs),
-		LatestSaleDate:    latestSaleDate,
-		Flash:             flash,
+	if dwellingType != "" {
+		filterValues.Set("dwelling", dwellingType)
 	}
-
+	if structuredSort != "street" {
+		filterValues.Set("sort", structuredSort)
+	}
+	if onlyWithSales {
+		filterValues.Set("only_with_sales", "1")
+	}
+	data.FilterAction = "/properties"
+	data.FilterParams = queryParams(filterValues, "dwelling", "sort", "only_with_sales")
 	app.renderTemplate(w, "index.html", data)
 }
 
@@ -1029,6 +2008,7 @@ func (app *App) handleSuburbAnalytics(w http.ResponseWriter, r *http.Request) {
 		PriceRange:     priceRange,
 		Flash:          app.readFlash(w, r),
 	}
+	data.StatsStatus, data.StatsUpdated, _ = app.statsSnapshot()
 
 	if suburb != "" && state != "" {
 		analyticsRow, actualPriceRange, requestedCount, err := app.suburbPriceStats(ctx, suburb, state, priceRange)
@@ -1282,79 +2262,35 @@ func (app *App) handleSuburbLosses(w http.ResponseWriter, r *http.Request) {
 		*typeCounts["all"], *typeCounts["house"], *typeCounts["unit"], *typeCounts["townhouse"], *typeCounts["other"],
 	}
 
+	dwellingFilter := lossType
+	if dwellingFilter == "all" {
+		dwellingFilter = ""
+	}
+	total, err := app.queries.CountSuburbLosses(ctx, database.CountSuburbLossesParams{
+		Cutoff:       lossCutoff(rangeValue),
+		DwellingType: dwellingFilter,
+		Suburb:       suburb,
+		State:        state,
+	})
+	if err != nil {
+		log.Printf("Error counting losses for %s: %v", suburb, err)
+	}
+	data.LossTotal = total
+	setSearchPagination(&data, page, total, suburbSalesPageSize)
+
 	losses, err := app.queries.GetSuburbLosses(ctx, database.GetSuburbLossesParams{
-		Cutoff: lossCutoff(rangeValue),
-		Suburb: suburb,
-		State:  state,
+		Cutoff:       lossCutoff(rangeValue),
+		Suburb:       suburb,
+		State:        state,
+		DwellingType: dwellingFilter,
+		Sort:         sortValue,
+		RowOffset:    int64((data.Page - 1) * suburbSalesPageSize),
+		RowLimit:     suburbSalesPageSize,
 	})
 	if err != nil {
 		log.Printf("Error fetching losses for %s: %v", suburb, err)
 	}
-
-	if lossType != "all" {
-		filtered := losses[:0]
-		for _, loss := range losses {
-			matches := loss.DwellingType == lossType
-			if lossType == "other" {
-				matches = loss.DwellingType == "other" || loss.DwellingType == "unknown"
-			}
-			if matches {
-				filtered = append(filtered, loss)
-			}
-		}
-		losses = filtered
-	}
-
-	switch sortValue {
-	case "percent":
-		sort.SliceStable(losses, func(i, j int) bool {
-			if losses[i].LossPercent == losses[j].LossPercent {
-				return losses[i].SettlementDate > losses[j].SettlementDate
-			}
-			return losses[i].LossPercent < losses[j].LossPercent
-		})
-	case "date":
-		sort.SliceStable(losses, func(i, j int) bool {
-			if losses[i].SettlementDate == losses[j].SettlementDate {
-				return losses[i].LossPercent < losses[j].LossPercent
-			}
-			return losses[i].SettlementDate > losses[j].SettlementDate
-		})
-	default:
-		sort.SliceStable(losses, func(i, j int) bool {
-			if losses[i].LossAmount == losses[j].LossAmount {
-				return losses[i].LossPercent < losses[j].LossPercent
-			}
-			return losses[i].LossAmount < losses[j].LossAmount
-		})
-	}
-
-	data.LossTotal = int64(len(losses))
-	data.TotalPages = int((data.LossTotal + suburbSalesPageSize - 1) / suburbSalesPageSize)
-	if data.TotalPages < 1 {
-		data.TotalPages = 1
-	}
-	if page > data.TotalPages {
-		page = data.TotalPages
-		data.Page = page
-	}
-	data.HasPrev = page > 1
-	data.PrevPage = page - 1
-	data.NextPage = page + 1
-	data.HasNext = page < data.TotalPages
-	start := (page - 1) * suburbSalesPageSize
-	end := start + suburbSalesPageSize
-	if start > len(losses) {
-		start = len(losses)
-	}
-	if end > len(losses) {
-		end = len(losses)
-	}
-	data.LossSales = losses[start:end]
-	if len(data.LossSales) > 0 {
-		data.ShowingFrom = start + 1
-		data.ShowingTo = end
-	}
+	data.LossSales = losses
 
 	app.renderTemplate(w, "losses.html", data)
 }
@@ -1504,15 +2440,26 @@ func (app *App) handleSubmitAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify that the property exists in the database.
+	// Record the sale against the canonical property so duplicate PSI rows do
+	// not fragment the sale history or the analytics.
 	ctx := r.Context()
-	prop, err := app.queries.GetPropertyByPID(ctx, gnafPID)
+	canonicalPID, err := database.GetCanonicalPID(ctx, app.db, gnafPID)
+	if err != nil {
+		log.Printf("Could not resolve canonical PID for %s: %v", gnafPID, err)
+		canonicalPID = gnafPID
+	}
+	if canonicalPID == "" {
+		canonicalPID = gnafPID
+	}
+
+	// Verify that the property exists in the database.
+	prop, err := app.queries.GetPropertyByPID(ctx, canonicalPID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			app.renderSubmitError(w, r, http.StatusNotFound, gnafPID, settleDate, "That property ID was not found. Search for the address first, then add the sale from its property page.")
 			return
 		}
-		log.Printf("Database error looking up property '%s': %v", gnafPID, err)
+		log.Printf("Database error looking up property '%s': %v", canonicalPID, err)
 		app.renderSubmitError(w, r, http.StatusInternalServerError, gnafPID, settleDate, "We could not check that property right now. Please try again.")
 		return
 	}
@@ -1521,7 +2468,7 @@ func (app *App) handleSubmitAction(w http.ResponseWriter, r *http.Request) {
 
 	insertParams := database.InsertPropertySaleParams{
 		SaleID:         saleID,
-		GnafPid:        gnafPID,
+		GnafPid:        canonicalPID,
 		SettlementDate: settleDate,
 		SalePrice:      price,
 		SourceType:     sourceType,
@@ -1533,12 +2480,24 @@ func (app *App) handleSubmitAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := database.RefreshCanonicalSale(ctx, app.db, saleID); err != nil {
+		log.Printf("Could not refresh canonical sale %s: %v", saleID, err)
+		if rebuildErr := database.RebuildCanonicalSales(ctx, app.db); rebuildErr != nil {
+			log.Printf("Could not rebuild canonical sales after refresh failure: %v", rebuildErr)
+		}
+	}
 	if err := database.RefreshSuburbStat(ctx, app.db, prop.Suburb, prop.State); err != nil {
 		log.Printf("Could not refresh suburb statistics: %v", err)
 	}
-	log.Printf("Successfully recorded new sale %s for %s at $%d", saleID, gnafPID, price)
+	if err := database.RefreshStreetStat(ctx, app.db, prop.StreetName, prop.StreetType, prop.Suburb, prop.State, prop.Postcode); err != nil {
+		log.Printf("Could not refresh street statistics: %v", err)
+	}
+	if err := database.RefreshPostcodeStat(ctx, app.db, prop.Postcode); err != nil {
+		log.Printf("Could not refresh postcode statistics: %v", err)
+	}
+	log.Printf("Successfully recorded new sale %s for %s at $%d", saleID, canonicalPID, price)
 	app.setFlash(w, fmt.Sprintf("Sale of $%s recorded for %s, %s.", formatPriceInt(price), propertyAddress(prop), prop.Suburb))
-	http.Redirect(w, r, "/property/"+gnafPID, http.StatusSeeOther)
+	http.Redirect(w, r, "/property/"+canonicalPID, http.StatusSeeOther)
 }
 
 // ensureCSRFToken returns the existing token cookie or generates a new one.
@@ -1621,11 +2580,66 @@ func (app *App) readFlash(w http.ResponseWriter, r *http.Request) *FlashMessage 
 	return &FlashMessage{Type: "success", Message: string(decoded)}
 }
 
+// renderPostcodeError renders a postcode page with a service-unavailable
+// notice while keeping the requested postcode in the title/context.
+func (app *App) renderPostcodeError(w http.ResponseWriter, r *http.Request, postcode, title, message string) {
+	data := app.searchPageData(r.Context())
+	data.Title = title
+	data.SearchMode = "postcode"
+	data.QueryPostcode = postcode
+	data.SearchError = message
+	data.Flash = app.readFlash(w, r)
+	app.renderTemplateStatus(w, "postcode.html", data, http.StatusServiceUnavailable)
+}
+
+// lastImportDate returns the most recent successful or partial import date.
+// The value is cached briefly because it appears in the shared footer.
+func (app *App) getLastImportDate() string {
+	if app.db == nil || app.queries == nil {
+		return ""
+	}
+	app.lastImportMu.Lock()
+	defer app.lastImportMu.Unlock()
+	if !app.lastImportChecked.IsZero() && time.Since(app.lastImportChecked) < time.Minute {
+		return app.lastImportDate
+	}
+	date, err := app.queries.GetLastSuccessfulImport(context.Background())
+	if err == nil {
+		app.lastImportDate = date
+	} else if errors.Is(err, sql.ErrNoRows) {
+		app.lastImportDate = ""
+	} else {
+		log.Printf("Could not read last import date: %v", err)
+	}
+	app.lastImportChecked = time.Now()
+	return app.lastImportDate
+}
+
+// enrichPageData fills shared template fields that are not set by individual
+// handlers.
+func (app *App) enrichPageData(data any) any {
+	switch page := data.(type) {
+	case PageData:
+		if page.LastImportDate == "" {
+			page.LastImportDate = app.getLastImportDate()
+		}
+		return page
+	case *PageData:
+		if page != nil && page.LastImportDate == "" {
+			page.LastImportDate = app.getLastImportDate()
+		}
+		return page
+	default:
+		return data
+	}
+}
+
 func (app *App) renderTemplate(w http.ResponseWriter, name string, data any) {
 	app.renderTemplateStatus(w, name, data, http.StatusOK)
 }
 
 func (app *App) renderTemplateStatus(w http.ResponseWriter, name string, data any, status int) {
+	data = app.enrichPageData(data)
 	tmpl, ok := app.templates[name]
 	if !ok {
 		log.Printf("Unknown template: %s", name)

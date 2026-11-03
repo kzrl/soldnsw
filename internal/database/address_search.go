@@ -116,3 +116,132 @@ func addressFTSQuery(query string) string {
 	}
 	return strings.Join(tokens, " ")
 }
+
+// AddressPropertySearchOptions controls paginated address FTS result pages.
+type AddressPropertySearchOptions struct {
+	Query         string
+	DwellingType  string
+	OnlyWithSales bool
+	Sort          string
+	Limit         int
+	Offset        int
+}
+
+// SearchAddressProperties returns property rows for an FTS address query with
+// filtering, sorting and pagination applied in SQL.
+func SearchAddressProperties(ctx context.Context, db *sql.DB, opts AddressPropertySearchOptions) ([]GnafProperty, error) {
+	fts := addressFTSQuery(opts.Query)
+	if fts == "" {
+		return nil, nil
+	}
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	where, args := addressPropertyWhere(opts, fts)
+	order := addressPropertyOrder(opts.Sort)
+	query := `
+		SELECT
+			p.gnaf_pid, p.street_number, p.street_name, p.street_type, p.suburb, p.state, p.postcode,
+			p.latitude, p.longitude, p.lot_number, p.plan_number, p.property_type, p.land_area,
+			p.base_pid, p.dwelling_type
+		FROM address_fts f
+		JOIN gnaf_properties p ON p.gnaf_pid = f.gnaf_pid
+		LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
+		WHERE ` + where + `
+		ORDER BY ` + order + `
+		LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("address property search: %w", err)
+	}
+	defer rows.Close()
+
+	var properties []GnafProperty
+	for rows.Next() {
+		var p GnafProperty
+		if err := rows.Scan(
+			&p.GnafPid, &p.StreetNumber, &p.StreetName, &p.StreetType, &p.Suburb, &p.State, &p.Postcode,
+			&p.Latitude, &p.Longitude, &p.LotNumber, &p.PlanNumber, &p.PropertyType, &p.LandArea,
+			&p.BasePid, &p.DwellingType,
+		); err != nil {
+			return nil, err
+		}
+		properties = append(properties, p)
+	}
+	return properties, rows.Err()
+}
+
+// CountAddressProperties counts the full filtered result set for an address
+// query without loading the rows.
+func CountAddressProperties(ctx context.Context, db *sql.DB, opts AddressPropertySearchOptions) (int64, error) {
+	fts := addressFTSQuery(opts.Query)
+	if fts == "" {
+		return 0, nil
+	}
+	where, args := addressPropertyWhere(opts, fts)
+	query := `
+		SELECT COUNT(*)
+		FROM address_fts f
+		JOIN gnaf_properties p ON p.gnaf_pid = f.gnaf_pid
+		LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
+		WHERE ` + where
+	var count int64
+	if err := db.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count address properties: %w", err)
+	}
+	return count, nil
+}
+
+func addressPropertyWhere(opts AddressPropertySearchOptions, fts string) (string, []any) {
+	conditions := []string{
+		"f.address_fts MATCH ?",
+		"(pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)",
+	}
+	args := []any{fts}
+	if opts.DwellingType != "" {
+		if opts.DwellingType == "other" {
+			conditions = append(conditions, "(p.dwelling_type = 'other' OR p.dwelling_type = 'unknown')")
+		} else {
+			conditions = append(conditions, "p.dwelling_type = ?")
+			args = append(args, opts.DwellingType)
+		}
+	}
+	if opts.OnlyWithSales {
+		conditions = append(conditions, `EXISTS (
+			SELECT 1 FROM canonical_sales cs WHERE cs.canonical_pid = p.gnaf_pid
+		)`)
+	}
+	return strings.Join(conditions, " AND "), args
+}
+
+func addressPropertyOrder(sort string) string {
+	switch sort {
+	case "latest":
+		return `COALESCE((
+			SELECT cs.settlement_date FROM canonical_sales cs
+			WHERE cs.canonical_pid = p.gnaf_pid
+			ORDER BY cs.settlement_date DESC, cs.sale_id DESC LIMIT 1
+		), '') DESC, p.street_name, p.street_number`
+	case "price":
+		return `COALESCE((
+			SELECT cs.sale_price FROM canonical_sales cs
+			WHERE cs.canonical_pid = p.gnaf_pid
+			ORDER BY cs.settlement_date DESC, cs.sale_id DESC LIMIT 1
+		), 0) DESC, p.street_name, p.street_number`
+	case "street":
+		return `p.street_name, p.suburb, CAST(REPLACE(p.street_number, ' ', '') AS INTEGER), p.street_number`
+	default:
+		return "f.rank"
+	}
+}

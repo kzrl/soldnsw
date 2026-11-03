@@ -73,6 +73,77 @@
         {{block "content" .}}{{end}}
     </main>
 
+    {{define "resultFilters"}}
+    {{if .FilterAction}}
+    <form action="{{.FilterAction}}" method="GET" class="box p-3 mb-4">
+        {{range .FilterParams}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+        <div class="field is-grouped is-grouped-multiline mb-0">
+            <div class="control">
+                <label class="label is-small" for="resultDwelling">Dwelling</label>
+                <div class="select is-small">
+                    <select id="resultDwelling" name="dwelling">
+                        <option value="" {{if eq .QueryDwellingType ""}}selected{{end}}>All</option>
+                        <option value="house" {{if eq .QueryDwellingType "house"}}selected{{end}}>House</option>
+                        <option value="unit" {{if eq .QueryDwellingType "unit"}}selected{{end}}>Unit</option>
+                        <option value="townhouse" {{if eq .QueryDwellingType "townhouse"}}selected{{end}}>Townhouse</option>
+                        <option value="other" {{if eq .QueryDwellingType "other"}}selected{{end}}>Other / unknown</option>
+                    </select>
+                </div>
+            </div>
+            <div class="control">
+                <label class="label is-small" for="resultSort">Sort</label>
+                <div class="select is-small">
+                    <select id="resultSort" name="sort">
+                        {{if .AllowRelevanceSort}}<option value="relevance" {{if eq .QuerySort "relevance"}}selected{{end}}>Relevance</option>{{end}}
+                        <option value="street" {{if eq .QuerySort "street"}}selected{{end}}>Street number</option>
+                        <option value="latest" {{if eq .QuerySort "latest"}}selected{{end}}>Latest sale</option>
+                        <option value="price" {{if eq .QuerySort "price"}}selected{{end}}>Latest sale price</option>
+                    </select>
+                </div>
+            </div>
+            <div class="control">
+                <label class="checkbox is-size-7 mt-5">
+                    <input type="checkbox" name="only_with_sales" value="1" {{if .QueryOnlyWithSales}}checked{{end}}>
+                    Only with recorded sales
+                </label>
+            </div>
+            <div class="control">
+                <label class="label is-small">&nbsp;</label>
+                <button type="submit" class="button is-small is-primary">Apply</button>
+            </div>
+        </div>
+    </form>
+    {{end}}
+    {{end}}
+
+    {{define "searchPager"}}
+    {{if gt .TotalPages 1}}
+    <div class="level mt-4">
+        <div class="level-left">
+            <p class="is-size-7 has-text-grey">Page {{.Page}} of {{.TotalPages}}</p>
+        </div>
+        <div class="level-right">
+            <div class="buttons has-addons mb-0">
+                {{if .HasPrev}}
+                <a class="button is-small is-light" href="{{.PagerBaseURL}}page={{.PrevPage}}">
+                    <span class="icon is-small"><i class="fa-solid fa-chevron-left"></i></span><span>Previous</span>
+                </a>
+                {{else}}
+                <button class="button is-small is-light" disabled>Previous</button>
+                {{end}}
+                {{if .HasNext}}
+                <a class="button is-small is-light" href="{{.PagerBaseURL}}page={{.NextPage}}">
+                    <span>Next</span><span class="icon is-small"><i class="fa-solid fa-chevron-right"></i></span>
+                </a>
+                {{else}}
+                <button class="button is-small is-light" disabled>Next</button>
+                {{end}}
+            </div>
+        </div>
+    </div>
+    {{end}}
+    {{end}}
+
     <!-- Footer with data attribution -->
     <footer class="footer mt-6">
         <div class="container">
@@ -93,6 +164,7 @@
             </div>
             <hr class="my-4">
             <div class="content has-text-centered is-size-7 has-text-grey">
+                {{if .LastImportDate}}<p>Last successful data import: {{formatDate .LastImportDate}}</p>{{end}}
                 <p>&copy; 2026 SoldNSW</p>
             </div>
         </div>

@@ -55,6 +55,18 @@
             </div>
         </div>
 
+        {{if eq .StatsStatus "building"}}
+        <div class="notification is-info is-light">
+            <p><i class="fa-solid fa-gears mr-1"></i> Market analytics are being prepared. Suburb statistics will appear shortly.</p>
+        </div>
+        {{else if eq .StatsStatus "failed"}}
+        <div class="notification is-danger is-light">
+            <p><i class="fa-solid fa-triangle-exclamation mr-1"></i> Market analytics could not be built. Please try again later or contact the administrator.</p>
+        </div>
+        {{else if and (eq .StatsStatus "ready") .StatsUpdated}}
+        <p class="is-size-7 has-text-grey mb-3">Analytics updated {{.StatsUpdated}}</p>
+        {{end}}
+
         {{if .Analytics}}
             <div class="level is-mobile mb-3">
                 <div class="level-left">

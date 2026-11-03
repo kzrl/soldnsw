@@ -20,7 +20,7 @@ type ClearanceResult struct {
 }
 
 // FetchClearanceSession launches Chrome via chromedp, solves/passes Cloudflare, and extracts cookies & HTML
-func FetchClearanceSession(ctx context.Context, targetURL string, headless bool, timeout time.Duration) (*ClearanceResult, error) {
+func FetchClearanceSession(ctx context.Context, targetURL string, headless bool, timeout time.Duration, browserPath string) (*ClearanceResult, error) {
 	fmt.Printf("[*] Launching Chrome via chromedp (headless: %v) to acquire Cloudflare clearance...\n", headless)
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -33,6 +33,9 @@ func FetchClearanceSession(ctx context.Context, targetURL string, headless bool,
 		chromedp.Flag("window-size", "1280,800"),
 		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
 	)
+	if browserPath != "" {
+		opts = append(opts, chromedp.ExecPath(browserPath))
+	}
 
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
 	defer cancelAlloc()

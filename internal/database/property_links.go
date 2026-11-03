@@ -7,14 +7,11 @@ import (
 	"fmt"
 )
 
+const propertyLinksVersion = "2"
+
 const rebuildPropertyLinks = `
 INSERT INTO property_links (gnaf_pid, canonical_pid, match_basis, updated_at)
-WITH latest AS (
-    SELECT gnaf_pid, MAX(settlement_date) AS last_sale
-    FROM property_sales
-    GROUP BY gnaf_pid
-),
-keyed AS (
+WITH keyed AS (
     SELECT
         p.gnaf_pid,
         CASE
@@ -42,9 +39,12 @@ keyed AS (
                 THEN 'address_lot_plan'
             ELSE 'address_prop_id'
         END AS match_basis,
-        COALESCE(l.last_sale, '') AS last_sale
+        CASE WHEN p.gnaf_pid NOT LIKE 'GANSW_PSI_%' THEN 0 ELSE 1 END AS is_psi,
+        CASE WHEN TRIM(COALESCE(p.street_number, '')) <> '' THEN 0 ELSE 1 END AS missing_number,
+        CASE WHEN TRIM(COALESCE(p.lot_number, '')) <> '' OR TRIM(COALESCE(p.plan_number, '')) <> ''
+             THEN 0 ELSE 1 END AS missing_cadastre,
+        CASE WHEN p.latitude IS NOT NULL AND p.longitude IS NOT NULL THEN 0 ELSE 1 END AS missing_coordinates
     FROM gnaf_properties p
-    LEFT JOIN latest l ON l.gnaf_pid = p.gnaf_pid
 ),
 ranked AS (
     SELECT
@@ -52,7 +52,12 @@ ranked AS (
         match_basis,
         FIRST_VALUE(gnaf_pid) OVER (
             PARTITION BY match_key
-            ORDER BY last_sale DESC, gnaf_pid ASC
+            ORDER BY
+                is_psi ASC,
+                missing_number ASC,
+                missing_cadastre ASC,
+                missing_coordinates ASC,
+                gnaf_pid ASC
         ) AS canonical_pid
     FROM keyed
 )
@@ -78,18 +83,31 @@ func RebuildPropertyLinks(ctx context.Context, db *sql.DB) error {
 	if _, err := tx.ExecContext(ctx, rebuildPropertyLinks); err != nil {
 		return fmt.Errorf("rebuild property links: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO schema_meta (key, value) VALUES ('property_links_version', ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, propertyLinksVersion); err != nil {
+		return fmt.Errorf("record property link version: %w", err)
+	}
 	return tx.Commit()
 }
 
-// EnsurePropertyLinks builds the mapping when it is empty. The bool reports
-// whether a rebuild happened.
+// EnsurePropertyLinks rebuilds the mapping when it is empty or was produced by
+// an older canonical-selection rule. The bool reports whether a rebuild
+// happened.
 func EnsurePropertyLinks(ctx context.Context, db *sql.DB) (bool, error) {
-	var count int64
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM property_links").Scan(&count); err != nil {
-		return false, fmt.Errorf("count property links: %w", err)
+	var version string
+	versionErr := db.QueryRowContext(ctx, "SELECT value FROM schema_meta WHERE key = 'property_links_version'").Scan(&version)
+	if versionErr != nil && !errors.Is(versionErr, sql.ErrNoRows) {
+		return false, fmt.Errorf("read property link version: %w", versionErr)
 	}
-	if count > 0 {
-		return false, nil
+	if versionErr == nil && version == propertyLinksVersion {
+		var count int64
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM property_links").Scan(&count); err != nil {
+			return false, fmt.Errorf("count property links: %w", err)
+		}
+		if count > 0 {
+			return false, nil
+		}
 	}
 	if err := RebuildPropertyLinks(ctx, db); err != nil {
 		return false, err

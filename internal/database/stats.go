@@ -11,41 +11,66 @@ INSERT INTO suburb_stats (
     suburb, state, property_count, sales_count, avg_price, max_price, min_price,
     change_1y, change_5y, change_10y, updated_at
 )
-WITH aggregated AS (
+WITH props AS (
     SELECT
         p.suburb,
         p.state,
-        COUNT(DISTINCT COALESCE(pl.canonical_pid, p.gnaf_pid)) AS property_count,
-        COUNT(s.sale_id) AS sales_count,
-        AVG(s.sale_price) AS avg_price,
-        MAX(s.sale_price) AS max_price,
-        MIN(s.sale_price) AS min_price,
-        AVG(CASE WHEN s.settlement_date >= date('now', '-12 months') THEN s.sale_price END) AS current_avg,
-        AVG(CASE WHEN s.settlement_date >= date('now', '-24 months')
-                  AND s.settlement_date < date('now', '-12 months') THEN s.sale_price END) AS avg_1y_ago,
-        AVG(CASE WHEN s.settlement_date >= date('now', '-72 months')
-                  AND s.settlement_date < date('now', '-60 months') THEN s.sale_price END) AS avg_5y_ago,
-        AVG(CASE WHEN s.settlement_date >= date('now', '-132 months')
-                  AND s.settlement_date < date('now', '-120 months') THEN s.sale_price END) AS avg_10y_ago
+        COUNT(DISTINCT COALESCE(pl.canonical_pid, p.gnaf_pid)) AS property_count
     FROM gnaf_properties p
-    LEFT JOIN property_sales s ON p.gnaf_pid = s.gnaf_pid
     LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
     GROUP BY p.suburb, p.state
+),
+sales AS (
+    SELECT
+        cs.suburb,
+        cs.state,
+        COUNT(*) AS sales_count,
+        AVG(cs.sale_price) AS avg_price,
+        MAX(cs.sale_price) AS max_price,
+        MIN(cs.sale_price) AS min_price,
+        AVG(CASE WHEN cs.settlement_date >= date('now', '-12 months')
+                 THEN cs.sale_price END) AS current_avg,
+        AVG(CASE WHEN cs.settlement_date >= date('now', '-24 months')
+                  AND cs.settlement_date < date('now', '-12 months')
+                 THEN cs.sale_price END) AS avg_1y_ago,
+        AVG(CASE WHEN cs.settlement_date >= date('now', '-72 months')
+                  AND cs.settlement_date < date('now', '-60 months')
+                 THEN cs.sale_price END) AS avg_5y_ago,
+        AVG(CASE WHEN cs.settlement_date >= date('now', '-132 months')
+                  AND cs.settlement_date < date('now', '-120 months')
+                 THEN cs.sale_price END) AS avg_10y_ago
+    FROM canonical_sales cs
+    GROUP BY cs.suburb, cs.state
+),
+aggregated AS (
+    SELECT
+        p.suburb,
+        p.state,
+        p.property_count,
+        COALESCE(s.sales_count, 0) AS sales_count,
+        CAST(COALESCE(s.avg_price, 0) AS INTEGER) AS avg_price,
+        CAST(COALESCE(s.max_price, 0) AS INTEGER) AS max_price,
+        CAST(COALESCE(s.min_price, 0) AS INTEGER) AS min_price,
+        CASE WHEN s.current_avg > 0 AND s.avg_1y_ago > 0
+             THEN (s.current_avg - s.avg_1y_ago) * 100.0 / s.avg_1y_ago END AS change_1y,
+        CASE WHEN s.current_avg > 0 AND s.avg_5y_ago > 0
+             THEN (s.current_avg - s.avg_5y_ago) * 100.0 / s.avg_5y_ago END AS change_5y,
+        CASE WHEN s.current_avg > 0 AND s.avg_10y_ago > 0
+             THEN (s.current_avg - s.avg_10y_ago) * 100.0 / s.avg_10y_ago END AS change_10y
+    FROM props p
+    LEFT JOIN sales s ON s.suburb = p.suburb AND s.state = p.state
 )
 SELECT
     suburb,
     state,
     property_count,
     sales_count,
-    CAST(COALESCE(avg_price, 0) AS INTEGER),
-    CAST(COALESCE(max_price, 0) AS INTEGER),
-    CAST(COALESCE(min_price, 0) AS INTEGER),
-    CASE WHEN current_avg > 0 AND avg_1y_ago > 0
-         THEN (current_avg - avg_1y_ago) * 100.0 / avg_1y_ago END,
-    CASE WHEN current_avg > 0 AND avg_5y_ago > 0
-         THEN (current_avg - avg_5y_ago) * 100.0 / avg_5y_ago END,
-    CASE WHEN current_avg > 0 AND avg_10y_ago > 0
-         THEN (current_avg - avg_10y_ago) * 100.0 / avg_10y_ago END,
+    avg_price,
+    max_price,
+    min_price,
+    change_1y,
+    change_5y,
+    change_10y,
     CURRENT_TIMESTAMP
 FROM aggregated`
 
@@ -54,42 +79,68 @@ INSERT INTO suburb_stats (
     suburb, state, property_count, sales_count, avg_price, max_price, min_price,
     change_1y, change_5y, change_10y, updated_at
 )
-WITH aggregated AS (
+WITH props AS (
     SELECT
         p.suburb,
         p.state,
-        COUNT(DISTINCT COALESCE(pl.canonical_pid, p.gnaf_pid)) AS property_count,
-        COUNT(s.sale_id) AS sales_count,
-        AVG(s.sale_price) AS avg_price,
-        MAX(s.sale_price) AS max_price,
-        MIN(s.sale_price) AS min_price,
-        AVG(CASE WHEN s.settlement_date >= date('now', '-12 months') THEN s.sale_price END) AS current_avg,
-        AVG(CASE WHEN s.settlement_date >= date('now', '-24 months')
-                  AND s.settlement_date < date('now', '-12 months') THEN s.sale_price END) AS avg_1y_ago,
-        AVG(CASE WHEN s.settlement_date >= date('now', '-72 months')
-                  AND s.settlement_date < date('now', '-60 months') THEN s.sale_price END) AS avg_5y_ago,
-        AVG(CASE WHEN s.settlement_date >= date('now', '-132 months')
-                  AND s.settlement_date < date('now', '-120 months') THEN s.sale_price END) AS avg_10y_ago
+        COUNT(DISTINCT COALESCE(pl.canonical_pid, p.gnaf_pid)) AS property_count
     FROM gnaf_properties p
-    LEFT JOIN property_sales s ON p.gnaf_pid = s.gnaf_pid
     LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
     WHERE p.suburb = UPPER(?1) AND p.state = UPPER(?2)
     GROUP BY p.suburb, p.state
+),
+sales AS (
+    SELECT
+        cs.suburb,
+        cs.state,
+        COUNT(*) AS sales_count,
+        AVG(cs.sale_price) AS avg_price,
+        MAX(cs.sale_price) AS max_price,
+        MIN(cs.sale_price) AS min_price,
+        AVG(CASE WHEN cs.settlement_date >= date('now', '-12 months')
+                 THEN cs.sale_price END) AS current_avg,
+        AVG(CASE WHEN cs.settlement_date >= date('now', '-24 months')
+                  AND cs.settlement_date < date('now', '-12 months')
+                 THEN cs.sale_price END) AS avg_1y_ago,
+        AVG(CASE WHEN cs.settlement_date >= date('now', '-72 months')
+                  AND cs.settlement_date < date('now', '-60 months')
+                 THEN cs.sale_price END) AS avg_5y_ago,
+        AVG(CASE WHEN cs.settlement_date >= date('now', '-132 months')
+                  AND cs.settlement_date < date('now', '-120 months')
+                 THEN cs.sale_price END) AS avg_10y_ago
+    FROM canonical_sales cs
+    WHERE cs.suburb = UPPER(?1) AND cs.state = UPPER(?2)
+    GROUP BY cs.suburb, cs.state
+),
+aggregated AS (
+    SELECT
+        p.suburb,
+        p.state,
+        p.property_count,
+        COALESCE(s.sales_count, 0) AS sales_count,
+        CAST(COALESCE(s.avg_price, 0) AS INTEGER) AS avg_price,
+        CAST(COALESCE(s.max_price, 0) AS INTEGER) AS max_price,
+        CAST(COALESCE(s.min_price, 0) AS INTEGER) AS min_price,
+        CASE WHEN s.current_avg > 0 AND s.avg_1y_ago > 0
+             THEN (s.current_avg - s.avg_1y_ago) * 100.0 / s.avg_1y_ago END AS change_1y,
+        CASE WHEN s.current_avg > 0 AND s.avg_5y_ago > 0
+             THEN (s.current_avg - s.avg_5y_ago) * 100.0 / s.avg_5y_ago END AS change_5y,
+        CASE WHEN s.current_avg > 0 AND s.avg_10y_ago > 0
+             THEN (s.current_avg - s.avg_10y_ago) * 100.0 / s.avg_10y_ago END AS change_10y
+    FROM props p
+    LEFT JOIN sales s ON s.suburb = p.suburb AND s.state = p.state
 )
 SELECT
     suburb,
     state,
     property_count,
     sales_count,
-    CAST(COALESCE(avg_price, 0) AS INTEGER),
-    CAST(COALESCE(max_price, 0) AS INTEGER),
-    CAST(COALESCE(min_price, 0) AS INTEGER),
-    CASE WHEN current_avg > 0 AND avg_1y_ago > 0
-         THEN (current_avg - avg_1y_ago) * 100.0 / avg_1y_ago END,
-    CASE WHEN current_avg > 0 AND avg_5y_ago > 0
-         THEN (current_avg - avg_5y_ago) * 100.0 / avg_5y_ago END,
-    CASE WHEN current_avg > 0 AND avg_10y_ago > 0
-         THEN (current_avg - avg_10y_ago) * 100.0 / avg_10y_ago END,
+    avg_price,
+    max_price,
+    min_price,
+    change_1y,
+    change_5y,
+    change_10y,
     CURRENT_TIMESTAMP
 FROM aggregated
 WHERE true

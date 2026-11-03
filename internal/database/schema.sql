@@ -26,13 +26,6 @@ CREATE TABLE IF NOT EXISTS property_sales (
     FOREIGN KEY (gnaf_pid) REFERENCES gnaf_properties(gnaf_pid) ON DELETE CASCADE
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_gnaf_suburb ON gnaf_properties(suburb, street_name, postcode);
-CREATE INDEX IF NOT EXISTS idx_gnaf_suburb_state ON gnaf_properties(suburb, state);
-CREATE INDEX IF NOT EXISTS idx_gnaf_state ON gnaf_properties(state);
-CREATE INDEX IF NOT EXISTS idx_gnaf_street ON gnaf_properties(street_name);
-CREATE INDEX IF NOT EXISTS idx_gnaf_postcode ON gnaf_properties(postcode);
-CREATE INDEX IF NOT EXISTS idx_sales_lookup ON property_sales(gnaf_pid, settlement_date DESC);
-CREATE INDEX IF NOT EXISTS idx_sales_date ON property_sales(settlement_date DESC);
 
 CREATE TABLE IF NOT EXISTS suburb_stats (
     suburb TEXT NOT NULL,
@@ -47,6 +40,28 @@ CREATE TABLE IF NOT EXISTS suburb_stats (
     change_10y REAL,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (suburb, state)
+) STRICT;
+
+-- street_stats and postcode_stats are materialised for fast autocomplete.
+CREATE TABLE IF NOT EXISTS street_stats (
+    street_name TEXT NOT NULL,
+    street_type TEXT NOT NULL,
+    suburb TEXT NOT NULL,
+    state TEXT NOT NULL,
+    postcode TEXT NOT NULL,
+    property_count INTEGER NOT NULL DEFAULT 0,
+    sales_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (street_name, street_type, suburb, state, postcode)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS postcode_stats (
+    postcode TEXT PRIMARY KEY,
+    property_count INTEGER NOT NULL DEFAULT 0,
+    sales_count INTEGER NOT NULL DEFAULT 0,
+    suburb_count INTEGER NOT NULL DEFAULT 0,
+    sample_suburb TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) STRICT;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS address_fts USING fts5(
@@ -64,6 +79,50 @@ CREATE TABLE IF NOT EXISTS property_links (
     FOREIGN KEY (canonical_pid) REFERENCES gnaf_properties(gnaf_pid) ON DELETE CASCADE
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_property_links_canonical
-ON property_links(canonical_pid);
+
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) STRICT;
+
+-- canonical_sales is the analytics-facing sale set. Raw property_sales rows
+-- are retained for property history and provenance; this table maps each sale
+-- to its canonical property and keeps one representative row per duplicate
+-- sale signature.
+CREATE TABLE IF NOT EXISTS canonical_sales (
+    sale_id TEXT PRIMARY KEY,
+    canonical_pid TEXT NOT NULL,
+    suburb TEXT NOT NULL,
+    state TEXT NOT NULL,
+    postcode TEXT NOT NULL,
+    settlement_date TEXT NOT NULL,
+    sale_price INTEGER NOT NULL,
+    source_type TEXT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    FOREIGN KEY (sale_id) REFERENCES property_sales(sale_id) ON DELETE CASCADE,
+    FOREIGN KEY (canonical_pid) REFERENCES gnaf_properties(gnaf_pid) ON DELETE CASCADE
+) STRICT;
+
+
+
+
+
+-- import_runs is an audit trail written by the bulk importer. status is one of
+-- success, partial or failed.
+CREATE TABLE IF NOT EXISTS import_runs (
+    run_id TEXT PRIMARY KEY,
+    file_name TEXT NOT NULL,
+    file_size INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    status TEXT NOT NULL,
+    properties_parsed INTEGER NOT NULL DEFAULT 0,
+    properties_written INTEGER NOT NULL DEFAULT 0,
+    sales_parsed INTEGER NOT NULL DEFAULT 0,
+    sales_written INTEGER NOT NULL DEFAULT 0,
+    sales_skipped INTEGER NOT NULL DEFAULT 0,
+    failed_files INTEGER NOT NULL DEFAULT 0,
+    failed_batches INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT NOT NULL DEFAULT ''
+) STRICT;
 

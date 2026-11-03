@@ -13,6 +13,18 @@ type AddressFt struct {
 	GnafPid string
 }
 
+type CanonicalSale struct {
+	SaleID         string
+	CanonicalPid   string
+	Suburb         string
+	State          string
+	Postcode       string
+	SettlementDate string
+	SalePrice      int64
+	SourceType     string
+	DedupeKey      string
+}
+
 type GnafProperty struct {
 	GnafPid      string
 	StreetNumber sql.NullString
@@ -31,6 +43,32 @@ type GnafProperty struct {
 	DwellingType string
 }
 
+type ImportRun struct {
+	RunID             string
+	FileName          string
+	FileSize          int64
+	StartedAt         string
+	FinishedAt        sql.NullString
+	Status            string
+	PropertiesParsed  int64
+	PropertiesWritten int64
+	SalesParsed       int64
+	SalesWritten      int64
+	SalesSkipped      int64
+	FailedFiles       int64
+	FailedBatches     int64
+	ErrorMessage      string
+}
+
+type PostcodeStat struct {
+	Postcode      string
+	PropertyCount int64
+	SalesCount    int64
+	SuburbCount   int64
+	SampleSuburb  string
+	UpdatedAt     string
+}
+
 type PropertyLink struct {
 	GnafPid      string
 	CanonicalPid string
@@ -45,6 +83,22 @@ type PropertySale struct {
 	SalePrice      int64
 	SourceType     string
 	CreatedAt      sql.NullString
+}
+
+type SchemaMetum struct {
+	Key   string
+	Value string
+}
+
+type StreetStat struct {
+	StreetName    string
+	StreetType    string
+	Suburb        string
+	State         string
+	Postcode      string
+	PropertyCount int64
+	SalesCount    int64
+	UpdatedAt     string
 }
 
 type SuburbStat struct {

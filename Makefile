@@ -26,10 +26,11 @@ SERVER     := $(BIN_DIR)/server
 INGEST     := $(BIN_DIR)/ingest
 DOWNLOADER := $(BIN_DIR)/downloader
 IMPORT_NSW := $(BIN_DIR)/import_nsw
+MIGRATE    := $(BIN_DIR)/migrate
 
 .DEFAULT_GOAL := build
 .PHONY: all generate build run run-server run-ingest run-downloader run-import \
-        test vet fmt tidy check clean help
+        migrate test vet fmt tidy check clean help
 
 all: build
 
@@ -54,9 +55,17 @@ build: generate
 	$(GO) build -tags "$(TAGS)" -trimpath -o $(DOWNLOADER) ./cmd/downloader
 	@echo "==> Building $(IMPORT_NSW)"
 	$(GO) build -tags "$(TAGS)" -trimpath -o $(IMPORT_NSW) ./cmd/import_nsw
+	@echo "==> Building $(MIGRATE)"
+	$(GO) build -tags "$(TAGS)" -trimpath -o $(MIGRATE) ./cmd/migrate
 
-## run: build and start the web server (the app)
+## migrate: apply schema/index migrations and rebuild materialised stats
+migrate: build
+	./$(MIGRATE) -db $(DB)
+
+## run: build, run migrations, and start the web server (the app)
 run: build
+	@echo "==> Applying migrations to $(DB)"
+	./$(MIGRATE) -db $(DB)
 	@echo "==> Starting server on http://localhost:$(PORT)"
 	./$(SERVER) -db $(DB) -port $(PORT) -templates $(TEMPLATES) -static $(STATIC)
 
@@ -70,9 +79,10 @@ run-ingest: build
 run-downloader: build
 	./$(DOWNLOADER) -out $(DATA_DIR) -workers $(WORKERS)
 
-## run-import: import downloaded NSW PSI archives into the database
+## run-import: import downloaded NSW PSI archives, then create/refresh indexes
 run-import: build
 	./$(IMPORT_NSW) -data $(DATA_DIR) -db $(DB) -batch $(BATCH)
+	./$(MIGRATE) -db $(DB) -stats=false
 
 ## test: run the Go test suite
 test:

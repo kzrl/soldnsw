@@ -9,7 +9,7 @@
                 {{if .HasSearched}}Search properties{{else}}Find NSW property sales{{end}}
             </h1>
             <p class="subtitle is-6 has-text-grey-light mt-2">
-                {{if .HasSearched}}Search by another address or refine the filters below.{{else}}Search by full address, street or suburb.{{end}}
+                {{if .HasSearched}}Search by another address, street or postcode.{{else}}Search by full address, street or postcode.{{end}}
             </p>
 
             <!-- Search Card -->
@@ -17,10 +17,10 @@
                 <div class="column is-9">
                     <div class="box has-background-white has-text-left p-5 shadow-lg">
                         <form action="/properties" method="GET" id="addressSearchForm" autocomplete="off">
-                            <label class="label is-small has-text-grey-dark" for="addressSearch">Search by address</label>
+                            <label class="label is-small has-text-grey-dark" for="addressSearch">Search by address, street or postcode</label>
                             <div class="field has-addons mb-2">
                                 <div class="control is-expanded has-icons-left">
-                                    <input id="addressSearch" class="input is-medium is-primary" type="text" name="address" placeholder="e.g. 17 Arnold St Killara NSW 2071" value="{{.QueryAddress}}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="addressSuggestions">
+                                    <input id="addressSearch" class="input is-medium is-primary" type="text" name="address" placeholder="e.g. 17 Arnold St Killara, Arnold St, or 2071" value="{{.QueryAddress}}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="addressSuggestions">
                                     <span class="icon is-small is-left"><i class="fa-solid fa-location-dot"></i></span>
                                 </div>
                                 <div class="control">
@@ -31,7 +31,14 @@
                                 </div>
                             </div>
                             <div id="addressSuggestions" class="address-suggestions" role="listbox" hidden></div>
-                            <p class="help has-text-grey">Start typing an address, street or suburb. Press Enter to search.</p>
+                            <p class="help has-text-grey">Start typing an address, street or postcode. Press Enter to search, or pick a suggestion.</p>
+                            <div class="is-flex is-align-items-center is-flex-wrap-wrap mt-2">
+                                <span class="is-size-7 has-text-grey mr-2">Try:</span>
+                                <div class="tags are-small mb-0">
+                                    <a href="/properties?address=Arnold+St+Killara" class="tag is-light">Arnold St Killara</a>
+                                    <a href="/properties?address=2071" class="tag is-light">2071</a>
+                                </div>
+                            </div>
                             {{if .HasSearched}}
                             <div class="has-text-right">
                                 <a href="/" class="is-size-7 has-text-grey"><i class="fa-solid fa-xmark mr-1"></i>Clear search</a>
@@ -40,7 +47,7 @@
                         </form>
 
                         <details class="mt-3" {{if or .QuerySuburb .QueryStreet .QueryNumber .QueryPostcode}}open{{end}}>
-                            <summary class="is-size-7 has-text-grey">Advanced search by suburb, street, number or postcode</summary>
+                            <summary class="is-size-7 has-text-grey">Advanced search by street, suburb, number or postcode</summary>
                             <form action="/properties" method="GET" class="mt-3">
                                 <div class="columns is-variable is-2 is-multiline">
                                     <div class="column is-2">
@@ -147,28 +154,127 @@
 
 <!-- Search Results -->
 {{if .HasSearched}}
-<section class="section py-5">
+<section class="section py-5" id="search-results">
     <div class="container">
+        {{if .SearchError}}
+        <div class="notification is-danger is-light p-5">
+            <p class="is-size-5 mb-1"><i class="fa-solid fa-triangle-exclamation mr-2"></i> Search unavailable</p>
+            <p>{{.SearchError}}</p>
+        </div>
+        {{end}}
+        {{if eq .SearchMode "street"}}
         <div class="level mb-4">
             <div class="level-left">
                 <div>
                     <h2 class="title is-4 mb-1">
-                        Search results{{if .QueryAddress}} for <span class="has-text-primary">“{{.QueryAddress}}”</span>{{else}}{{if .QueryNumber}} for <span class="has-text-primary">{{.QueryNumber}}</span>{{end}}{{if .QuerySuburb}} in <span class="has-text-primary">{{.QuerySuburb}}</span>{{end}}{{if .QueryStreet}} on streets starting with "{{.QueryStreet}}"{{end}}{{if .QueryPostcode}} {{.QueryPostcode}}{{end}}{{if .QueryState}} {{.QueryState}}{{end}}{{end}}
+                        Streets matching
+                        {{if .QueryAddress}}<span class="has-text-primary">“{{.QueryAddress}}”</span>{{else}}your filters{{end}}
                     </h2>
                     <p class="subtitle is-6 has-text-grey">
-                        {{len .Properties}} address record{{if ne (len .Properties) 1}}s{{end}}{{if eq (len .Properties) 50}} (showing the first 50 — add a street or state to narrow the search){{end}}
+                        {{.ResultTotal}} street{{if ne .ResultTotal 1}}s{{end}} found{{if gt .TotalPages 1}} &bull; page {{.Page}} of {{.TotalPages}}{{end}}. Choose a street to see every property on it.
                     </p>
                 </div>
             </div>
-            {{if .QuerySuburb}}
+        </div>
+
+        {{if .StreetMatches}}
+        <div class="table-container">
+            <table class="table is-fullwidth is-hoverable is-striped">
+                <thead>
+                    <tr class="has-background-light">
+                        <th scope="col">Street</th>
+                        <th scope="col">Suburb</th>
+                        <th scope="col">State / Postcode</th>
+                        <th scope="col" class="has-text-right">Properties</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .StreetMatches}}
+                    <tr>
+                        <td>
+                            <a href="{{streetURL .}}" class="has-text-weight-bold">{{.StreetName}} {{.StreetType}}</a>
+                        </td>
+                        <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-link">{{.Suburb}}</a></td>
+                        <td><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
+                        <td class="has-text-right">
+                            <a href="{{streetURL .}}" class="button is-small is-primary is-light">
+                                <span>{{.PropertyCount}} propert{{if eq .PropertyCount 1}}y{{else}}ies{{end}}</span>
+                                <span class="icon is-small"><i class="fa-solid fa-arrow-right"></i></span>
+                            </a>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        {{template "searchPager" .}}
+        {{else}}
+        <div class="notification is-warning is-light p-5 has-text-centered">
+            <p class="is-size-5 mb-2"><i class="fa-solid fa-triangle-exclamation mr-2"></i> No matching streets found</p>
+            <p class="has-text-grey mb-3">Try a shorter street name, or include a suburb or postcode.</p>
+            <a href="/" class="button is-small is-dark">Clear search</a>
+        </div>
+        {{end}}
+
+        {{else if eq .SearchMode "street-properties"}}
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <h2 class="title is-4 mb-1">
+                        {{.QueryStreet}} {{.QueryStreetType}}, {{.QuerySuburb}}
+                    </h2>
+                    <p class="subtitle is-6 has-text-grey">
+                        {{.ResultTotal}} propert{{if eq .ResultTotal 1}}y{{else}}ies{{end}} on this street
+                        {{if gt .TotalPages 1}}&bull; page {{.Page}} of {{.TotalPages}}{{end}}
+                    </p>
+                </div>
+            </div>
             <div class="level-right">
-                <a href="/suburbs?suburb={{.QuerySuburb}}{{if .QueryState}}&state={{.QueryState}}{{end}}" class="button is-info is-outlined is-small">
+                <a href="/properties?address={{urlquery .QueryStreet}}+{{urlquery .QueryStreetType}}+{{urlquery .QuerySuburb}}" class="button is-small is-light">
+                    <span class="icon is-small"><i class="fa-solid fa-arrow-left"></i></span>
+                    <span>Back to streets</span>
+                </a>
+                <a href="/suburbs?suburb={{urlquery .QuerySuburb}}&state={{urlquery .QueryState}}" class="button is-small is-info is-outlined ml-2">
                     <span class="icon"><i class="fa-solid fa-chart-line"></i></span>
-                    <span>View {{.QuerySuburb}} trends</span>
+                    <span>Suburb trends</span>
                 </a>
             </div>
-            {{end}}
         </div>
+
+        {{template "resultFilters" .}}
+
+        {{if .StreetSummary}}
+        <div class="columns is-multiline mb-5">
+            <div class="column is-6-mobile is-3-tablet">
+                <div class="card p-4 has-background-primary-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-house mr-1"></i> Properties</p>
+                    <p class="title is-4 has-text-primary mb-0">{{.StreetSummary.PropertyCount}}</p>
+                </div>
+            </div>
+            <div class="column is-6-mobile is-3-tablet">
+                <div class="card p-4 has-background-info-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-receipt mr-1"></i> Recorded sales</p>
+                    <p class="title is-4 has-text-info mb-0">{{.StreetSummary.SalesCount}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">{{if .StreetSummary.LatestSaleDate}}Latest {{formatDate .StreetSummary.LatestSaleDate}}{{else}}No sales recorded{{end}}</p>
+                </div>
+            </div>
+            <div class="column is-6-mobile is-3-tablet">
+                <div class="card p-4 has-background-success-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-calculator mr-1"></i> Median sale price</p>
+                    <p class="title is-4 has-text-success mb-0">{{if gt .StreetSummary.SalesCount 0}}${{formatPrice .StreetSummary.MedianPrice}}{{else}}—{{end}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Average: {{if gt .StreetSummary.SalesCount 0}}${{formatPrice .StreetSummary.AvgPrice}}{{else}}—{{end}}</p>
+                </div>
+            </div>
+            <div class="column is-6-mobile is-3-tablet">
+                <div class="card p-4 has-background-warning-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-up mr-1"></i> Highest sale</p>
+                    <p class="title is-4 has-text-dark mb-0">{{if gt .StreetSummary.SalesCount 0}}${{formatPrice .StreetSummary.MaxPrice}}{{else}}—{{end}}</p>
+                </div>
+            </div>
+        </div>
+        {{end}}
+
+
 
         {{if .Properties}}
         <div class="table-container">
@@ -193,12 +299,8 @@
                             <br><small class="has-text-grey">Lot {{if .LotNumber.Valid}}{{.LotNumber.String}}{{else}}—{{end}}, Plan {{if .PlanNumber.Valid}}{{.PlanNumber.String}}{{else}}—{{end}}</small>
                             {{end}}
                         </td>
-                        <td>
-                            <span class="tag is-light is-small">{{dwellingLabel .DwellingType}}</span>
-                        </td>
-                        <td>
-                            <a href="/suburbs?suburb={{.Suburb}}&state={{.State}}" class="has-text-link">{{.Suburb}}</a>
-                        </td>
+                        <td><span class="tag is-light is-small">{{dwellingLabel .DwellingType}}</span></td>
+                        <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-link">{{.Suburb}}</a></td>
                         <td><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
                         <td class="has-text-right">
                             <a href="/property/{{.GnafPid}}" class="button is-small is-primary is-light">
@@ -211,6 +313,80 @@
                 </tbody>
             </table>
         </div>
+        <p class="is-size-7 has-text-grey mt-3">Showing {{.ShowingFrom}}–{{.ShowingTo}} of {{.ResultTotal}} properties</p>
+        {{template "searchPager" .}}
+        {{else}}
+        <div class="notification is-warning is-light p-5 has-text-centered">
+            <p class="is-size-5 mb-2"><i class="fa-solid fa-triangle-exclamation mr-2"></i> No properties found on this street</p>
+            <a href="/" class="button is-small is-dark">Clear search</a>
+        </div>
+        {{end}}
+
+        {{else}}
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <h2 class="title is-4 mb-1">
+                        Search results{{if .QueryAddress}} for <span class="has-text-primary">“{{.QueryAddress}}”</span>{{else}}{{if .QueryNumber}} for <span class="has-text-primary">{{.QueryNumber}}</span>{{end}}{{if .QuerySuburb}} in <span class="has-text-primary">{{.QuerySuburb}}</span>{{end}}{{if .QueryStreet}} on streets starting with "{{.QueryStreet}}"{{end}}{{if .QueryPostcode}} {{.QueryPostcode}}{{end}}{{if .QueryState}} {{.QueryState}}{{end}}{{end}}
+                    </h2>
+                    <p class="subtitle is-6 has-text-grey">
+                        {{.ResultTotal}} address record{{if ne .ResultTotal 1}}s{{end}}{{if gt .TotalPages 1}} &bull; page {{.Page}} of {{.TotalPages}}{{end}}
+                    </p>
+                </div>
+            </div>
+            {{if .QuerySuburb}}
+            <div class="level-right">
+                <a href="/suburbs?suburb={{urlquery .QuerySuburb}}{{if .QueryState}}&state={{urlquery .QueryState}}{{end}}" class="button is-info is-outlined is-small">
+                    <span class="icon"><i class="fa-solid fa-chart-line"></i></span>
+                    <span>View {{.QuerySuburb}} trends</span>
+                </a>
+            </div>
+            {{end}}
+        </div>
+
+        {{template "resultFilters" .}}
+
+
+
+        {{if .Properties}}
+        <div class="table-container">
+            <table class="table is-fullwidth is-hoverable is-striped">
+                <thead>
+                    <tr class="has-background-light">
+                        <th scope="col">Address</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Suburb</th>
+                        <th scope="col">State / Postcode</th>
+                        <th scope="col" class="has-text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {{range .Properties}}
+                    <tr>
+                        <td>
+                            <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
+                                {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
+                            </a>
+                            {{if or .LotNumber.Valid .PlanNumber.Valid}}
+                            <br><small class="has-text-grey">Lot {{if .LotNumber.Valid}}{{.LotNumber.String}}{{else}}—{{end}}, Plan {{if .PlanNumber.Valid}}{{.PlanNumber.String}}{{else}}—{{end}}</small>
+                            {{end}}
+                        </td>
+                        <td><span class="tag is-light is-small">{{dwellingLabel .DwellingType}}</span></td>
+                        <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-link">{{.Suburb}}</a></td>
+                        <td><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
+                        <td class="has-text-right">
+                            <a href="/property/{{.GnafPid}}" class="button is-small is-primary is-light">
+                                <span>View sales</span>
+                                <span class="icon is-small"><i class="fa-solid fa-arrow-right"></i></span>
+                            </a>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+        <p class="is-size-7 has-text-grey mt-3">Showing {{.ShowingFrom}}–{{.ShowingTo}} of {{.ResultTotal}} addresses</p>
+        {{template "searchPager" .}}
         {{else}}
         <div class="notification is-warning is-light p-5 has-text-centered">
             <p class="is-size-5 mb-2"><i class="fa-solid fa-triangle-exclamation mr-2"></i> No matching properties found{{if .QueryAddress}} for <strong>“{{.QueryAddress}}”</strong>{{else}}{{if .QueryNumber}} at <strong>{{.QueryNumber}}</strong>{{end}}{{if .QuerySuburb}} in <strong>{{.QuerySuburb}}</strong>{{end}}{{if .QueryState}} ({{.QueryState}}){{end}}{{end}}</p>
@@ -218,12 +394,13 @@
             <a href="/" class="button is-small is-dark">Clear search</a>
         </div>
         {{end}}
+        {{end}}
     </div>
 </section>
 {{end}}
 
 <!-- Recent Sales -->
-<section class="section py-5">
+<section class="section py-5" id="recent-sales">
     <div class="container">
         <div class="level mb-4">
             <div class="level-left">
@@ -317,8 +494,8 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     function goTo(match) {
-        if (!match || !match.pid) return;
-        window.location.href = "/property/" + encodeURIComponent(match.pid);
+        if (!match || !match.value) return;
+        window.location.href = match.value;
     }
 
     function highlight() {
@@ -344,8 +521,15 @@ document.addEventListener("DOMContentLoaded", function () {
             return;
         }
         box.innerHTML = matches.map(function (match, index) {
+            var icon = "fa-location-dot";
+            var kind = "Address";
+            if (match.kind === "street") { icon = "fa-road"; kind = "Street"; }
+            if (match.kind === "suburb") { icon = "fa-city"; kind = "Suburb"; }
+            if (match.kind === "postcode") { icon = "fa-mail-bulk"; kind = "Postcode"; }
+            if (match.kind === "property") { icon = "fa-fingerprint"; kind = "Property"; }
             return '<button type="button" id="addressOption' + index + '" data-index="' + index + '" class="address-suggestion" role="option">' +
-                '<span class="icon is-small"><i class="fa-solid fa-location-dot"></i></span>' +
+                '<span class="icon is-small"><i class="fa-solid ' + icon + '"></i></span>' +
+                '<span class="suggestion-kind tag is-light is-small">' + kind + '</span>' +
                 '<span>' + escapeHtml(match.label) + '</span>' +
                 '</button>';
         }).join("");
@@ -360,7 +544,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     async function fetchSuggestions(query) {
         try {
-            const response = await fetch("/api/address/suggest?q=" + encodeURIComponent(query), {
+            const response = await fetch("/api/search/suggest?q=" + encodeURIComponent(query), {
                 headers: { "Accept": "application/json" }
             });
             if (!response.ok) throw new Error("suggestions unavailable");

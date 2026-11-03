@@ -47,6 +47,7 @@ type Config struct {
 	MaxRetries int
 	UseBrowser bool
 	Headless   bool
+	Browser    string
 }
 
 type Downloader struct {
@@ -79,6 +80,7 @@ func main() {
 	flag.IntVar(&cfg.MaxRetries, "retries", 3, "Maximum retry attempts per file on transient network failures")
 	flag.BoolVar(&cfg.UseBrowser, "use-browser", true, "Use chromedp headless Chrome to automatically solve Cloudflare clearance")
 	flag.BoolVar(&cfg.Headless, "headless", true, "Run chromedp in headless mode (set to false to see browser UI)")
+	flag.StringVar(&cfg.Browser, "browser", "", "Path to Chrome/Chromium binary (default: chromedp autodetect)")
 	flag.Parse()
 
 	cfg.Timeout = time.Duration(timeoutSec) * time.Second
@@ -114,7 +116,7 @@ func main() {
 
 	// Automatic Cloudflare Clearance via chromedp if no manual cookie is supplied
 	if cfg.UseBrowser && cfg.Cookie == "" {
-		clearanceRes, err := browser.FetchClearanceSession(ctx, cfg.TargetURL, cfg.Headless, cfg.Timeout)
+		clearanceRes, err := browser.FetchClearanceSession(ctx, cfg.TargetURL, cfg.Headless, cfg.Timeout, cfg.Browser)
 		if err != nil {
 			fmt.Printf("[!] chromedp clearance warning: %v\n", err)
 			fmt.Println("[*] Falling back to direct HTTP requests...")
@@ -232,6 +234,7 @@ func (d *Downloader) Run(ctx context.Context, initialHTML string) error {
 		fmt.Println("\n[!] Extracting standard NSW Valuer General weekly PSI URL structures...")
 		zipLinks = d.generateKnownWeeklyURLs()
 	}
+	zipLinks = dedupeZipItemsByFilename(zipLinks)
 
 	// Filter links if filter is specified
 	if d.config.Filter != "" {
@@ -480,7 +483,10 @@ func (d *Downloader) extractFilename(fileURL string) string {
 func (d *Downloader) downloadFileWithRetry(ctx context.Context, workerID int, item ZipItem) (string, int64, error) {
 	var lastErr error
 	destPath := filepath.Join(d.config.OutputDir, item.Filename)
-	tmpPath := destPath + ".tmp"
+	// A unique temporary path per worker prevents two workers (or a forced
+	// duplicate target) from writing the same file concurrently.
+	tmpPath := fmt.Sprintf("%s.%d.tmp", destPath, workerID)
+	defer os.Remove(tmpPath)
 
 	if !d.config.Force {
 		if info, err := os.Stat(destPath); err == nil && info.Size() > 0 {
@@ -495,23 +501,55 @@ func (d *Downloader) downloadFileWithRetry(ctx context.Context, workerID int, it
 		default:
 		}
 
-		bytes, err := d.downloadFile(ctx, item.URL, tmpPath)
+		written, err := d.downloadFile(ctx, item.URL, tmpPath)
 		if err == nil {
-			if err := os.Rename(tmpPath, destPath); err != nil {
+			if validationErr := validateDownloadedZip(tmpPath); validationErr != nil {
+				lastErr = fmt.Errorf("zip validation: %w", validationErr)
+			} else if err := os.Rename(tmpPath, destPath); err != nil {
 				return "error", 0, fmt.Errorf("rename tmp file error: %w", err)
+			} else {
+				return "downloaded", written, nil
 			}
-			return "downloaded", bytes, nil
+		} else {
+			lastErr = err
 		}
 
-		lastErr = err
 		if attempt < d.config.MaxRetries {
 			backoff := time.Duration(attempt*attempt) * 500 * time.Millisecond
 			time.Sleep(backoff)
 		}
 	}
 
-	os.Remove(tmpPath)
 	return "error", 0, lastErr
+}
+
+// validateDownloadedZip verifies that the completed temporary file is a readable
+// zip archive before it replaces any existing file.
+func validateDownloadedZip(path string) error {
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		return err
+	}
+	return r.Close()
+}
+
+// dedupeZipItemsByFilename keeps the first URL for each output filename. The
+// fallback weekly URL generator can emit multiple mirrors with the same name.
+func dedupeZipItemsByFilename(items []ZipItem) []ZipItem {
+	seen := make(map[string]bool, len(items))
+	out := make([]ZipItem, 0, len(items))
+	for _, item := range items {
+		name := item.Filename
+		if name == "" {
+			name = filepath.Base(item.URL)
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, item)
+	}
+	return out
 }
 
 // downloadFile streams the remote file to local disk

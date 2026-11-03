@@ -7,15 +7,15 @@ It uses G-NAF address records and NSW Valuer General Property Sales Information 
 
 ## Features
 
-- **Address search**: a single autocomplete box searches full addresses, streets and suburbs. An advanced form supports street number, street, suburb, state, postcode and dwelling-type filtering. Exact matches go directly to the property page. Autocomplete uses SQLite FTS5 and excludes records without a street number.
+- **Address, street and postcode search**: a single autocomplete box accepts a full address, street name, postcode or property ID, with typed address/street/suburb/postcode suggestions. Address results, grouped streets and street/postcode property lists are paginated. Street pages show a summary (property count, sales, median/average/highest price) and every property on the street. Postcode pages show a KPI overview, suburb breakdown and paginated properties. Results can be filtered by dwelling type, restricted to properties with recorded sales, and sorted by street number, latest sale or latest sale price. Database failures show a service-unavailable notice instead of a misleading empty result. Address autocomplete uses SQLite FTS5 and excludes records without a street number, while street grouping queries the address table directly and includes them.
 - **Historical property pages**: full settlement history, source registry, cadastral lot/plan, property type, land area and capital-growth summary. Strata and townhouse units have individual pages, plus a building overview showing all units that share a base PSI ID.
 - **Interactive map**: Leaflet.js map rendered only when latitude/longitude are available. NSW PSI imports do not contain coordinates, so those records show a clear "no coordinates" notice instead of a misleading default location.
 - **Suburb market analytics**: median and average sale prices with 1-year/5-year/10-year/all-time ranges, automatic 5-year fallback when the selected window has fewer than 20 sales, maximum and minimum prices, transaction volume, monthly average price trend (Chart.js), paginated sales records, and **1-year/5-year/10-year percentage change in average sale price** in the suburb overview table.
 - **Loss-making resales**: a public page per suburb listing properties whose latest recorded sale was below the immediately previous recorded sale, with 2-year/5-year/10-year/all-time ranges, dollar/percentage/date sorting, dwelling-type tabs (houses, units, townhouses, other), and nominal-loss summaries.
 - **Crowdsourced sale submission**: adds sale records with date, source and price validation, CSRF protection and per-IP rate limiting.
-- **NSW Valuer General PSI downloader**: discovers weekly bulk zip archives, handles Cloudflare clearance via `chromedp`, downloads concurrently with retries, and optionally extracts archives.
-- **PSI importer**: parses modern and historical NSW PSI `.DAT` records, including nested zip archives, and imports them in batched SQLite transactions.
-- **SQLite STRICT + WAL**: foreign keys, strict column types, indexes for the hot query paths, and pragmas applied to every pooled connection. Address records include `property_type` and `land_area` (stored in square metres). The address search index uses FTS5.
+- **NSW Valuer General PSI downloader**: discovers weekly bulk zip archives, handles Cloudflare clearance via `chromedp`, downloads concurrently with retries, validates downloaded ZIPs before replacing existing files, deduplicates mirror URLs by filename, and optionally extracts archives.
+- **PSI importer**: parses modern and historical NSW PSI `.DAT` records, including nested zip archives, and imports them in configurable `-batch` transactions. File, batch and row failures are counted, stored in `import_runs`, and reported with a non-zero exit status.
+- **SQLite STRICT + WAL**: foreign keys, strict column types, separately managed indexes for the hot query paths, and pragmas applied to every pooled connection. Address records include `property_type` and `land_area` (stored in square metres). The address search index uses FTS5, and materialised street/postcode tables keep autocomplete fast.
 - **Embedded schema**: the schema is embedded in the binaries, so the server and importer work from any working directory.
 - **Materialised analytics**: the whole-market overview is stored in a `suburb_stats` table (rebuilt on startup/import and updated after each submission), so `/suburbs` is fast even on a cold start.
 
@@ -35,17 +35,24 @@ It uses G-NAF address records and NSW Valuer General Property Sales Information 
 │   │   └── main.go           # Seed sample addresses and sales from embedded CSV
 │   ├── import_nsw/
 │   │   └── main.go           # Import downloaded NSW PSI zip/DAT files
+│   ├── migrate/
+│   │   └── main.go           # Explicit schema/index migration + stats rebuild
 │   └── downloader/
 │       └── main.go           # NSW Valuer General bulk PSI weekly zip downloader
 ├── db/
 │   ├── query.sql             # SQL queries for sqlc code generation
+│   ├── indexes.sql           # Heavy indexes applied by bin/migrate
 │   └── sqlc.yaml             # sqlc configuration
 ├── internal/
 │   ├── database/
 │   │   ├── schema.sql        # SQLite DDL, STRICT constraints and indexes (embedded)
 │   │   ├── schema.go         # go:embed for schema.sql
 │   │   ├── stats.go          # Materialised suburb summary maintenance
+│   │   ├── search_stats.go   # Materialised street/postcode suggestion stats
+│   │   ├── indexes.go        # Index migration and verification
+│   │   ├── canonical_sales.go # Canonical sale mapping and analytics source
 │   │   ├── address_search.go # FTS5 address index and autocomplete search
+│   │   ├── search_query.go   # Address/street/postcode query classification
 │   │   ├── property_links.go # Canonical property mapping for PSI duplicates
 │   │   ├── classification.go # House/unit/townhouse classification
 │   │   └── ...               # Generated sqlc models/queries
@@ -57,7 +64,8 @@ It uses G-NAF address records and NSW Valuer General Property Sales Information 
 │       └── clearance.go      # chromedp Cloudflare clearance helper
 ├── templates/
 │   ├── base.html             # Base layout, navbar, G-NAF attribution
-│   ├── index.html            # Search, recent sales and database stats
+│   ├── index.html            # Search, grouped street results, recent sales and stats
+│   ├── postcode.html         # Postcode overview and paginated properties
 │   ├── property.html         # Property details, sales history and map
 │   ├── suburb.html           # Suburb analytics, chart and paginated sales
 │   ├── losses.html           # Public loss-making resales page
@@ -102,11 +110,12 @@ All binaries are written to `bin/`.
 |---|---|
 | `make` / `make build` | Run `sqlc generate`, then build all four binaries |
 | `make generate` | Run `sqlc generate` against `db/query.sql` |
-| `make run` | Build and start the web app on `http://localhost:8080` |
+| `make migrate` | Apply schema/index migrations and rebuild materialised stats |
+| `make run` | Build, run migrations, and start the web app on `http://localhost:8080` |
 | `make run-server` | Alias for `make run` |
 | `make run-ingest` | Build and seed the sample G-NAF/sales dataset |
 | `make run-downloader` | Build and download NSW PSI archives |
-| `make run-import` | Build and import downloaded NSW PSI archives |
+| `make run-import` | Build, import downloaded NSW PSI archives, then create indexes |
 | `make test` | Run `go test -tags sqlite_fts5 ./...` |
 | `make check` | Run `generate`, `vet` and `test` |
 | `make vet` | Run `go vet ./...` |
@@ -151,7 +160,7 @@ make run-import DATA_DIR=data/nsw_weekly BATCH=5000
 make build
 ```
 
-This runs `sqlc generate` first and writes `bin/server`, `bin/ingest`, `bin/downloader` and `bin/import_nsw`.
+This runs `sqlc generate` first and writes `bin/server`, `bin/ingest`, `bin/downloader`, `bin/import_nsw` and `bin/migrate`.
 
 ### 2. Seed sample data (optional)
 
@@ -184,6 +193,7 @@ Useful options:
 - `-extract`: unpack downloaded archives automatically.
 - `-cookie "..."`: supply a session cookie if browser clearance is not desired.
 - `-use-browser=false`: skip `chromedp` and use direct HTTP requests.
+- `-browser /usr/bin/chromium`: explicitly select the Chrome/Chromium binary for `chromedp`.
 
 ### 4. Import PSI data
 
@@ -196,6 +206,24 @@ Equivalent direct invocation with extra options:
 ```bash
 ./bin/import_nsw -data data/nsw_weekly -db properties.db -batch 5000 -filter 2026 -v
 ```
+
+For a new database, create the heavy indexes after the import:
+
+```bash
+./bin/migrate -db properties.db -stats=false
+```
+
+`make run-import` does this automatically. `make run` also runs the full migrate
+command before starting the server.
+
+Useful importer options:
+
+- `-batch`: number of parsed property/sale rows per transaction.
+- `-fail-fast`: stop at the first file or batch failure instead of continuing.
+- `-dry-run`: parse and count records without writing.
+- `-v`: print skipped individual properties/sales.
+
+The importer records each top-level archive/directory in the `import_runs` table with file size, timing, counts, status and error details. The server footer shows the most recent successful or partial import date.
 
 The importer creates the schema automatically if the database is new. Property upserts preserve previously linked coordinates and cadastral details. It also rebuilds the `suburb_stats` analytics summary.
 
@@ -247,14 +275,20 @@ sqlc generate
 - Dwelling types are classified from property type, street number and plan number. `RESIDENCE` is used for both houses and units, so street/plan evidence takes priority. Records without enough evidence are `unknown` and appear under “Other / unknown”.
 - PSI property IDs are unit-aware. Strata and townhouse records that share a building-level PSI ID receive suffixes such as `_U3`, `_U305`, while `base_pid` preserves the original building ID. This prevents all units in a building from being merged into one property.
 - Canonical property links merge PSI records that represent the same address and lot/plan but appear under different district codes. Old property URLs redirect to the canonical PID, and sale histories are merged. Original property rows and sales are retained.
+- Canonical PID selection is deterministic: it prefers non-PSI records, then records with more address/cadastral/coordinate data, then the lowest PID. It no longer depends on the latest sale date, so new submissions do not silently move the canonical property.
+- Analytics read from a `canonical_sales` table. It maps every raw sale to its canonical property and keeps one representative row per duplicate sale signature `(canonical_pid, settlement_date, sale_price, source_type)`. Raw `property_sales` rows remain the source of truth for property history and provenance. The table is rebuilt after bulk imports and after canonical-link migrations, and updated per submission.
+- Crowdsourced sales are recorded against the canonical property, so duplicate PSI rows do not fragment sale history or suburb/postcode statistics.
 - The unit-aware PSI import required a full re-import; unit rows now carry their own lot/plan and sales. The previous database is retained as `properties.pre-units.db` for rollback.
-- Address autocomplete uses an FTS5 index rebuilt at startup when empty and after bulk imports. It intentionally excludes records without a street number because those addresses are ambiguous.
+- Address autocomplete uses an FTS5 index rebuilt at startup when empty and after bulk imports. It intentionally excludes records without a street number because those addresses are ambiguous. Street searches do not use that index, so streets containing only unnumbered records still appear in grouped street results. Suggestions also use materialised `street_stats`/`postcode_stats`, with a live-query fallback while the tables are being built. Suggestion prefix results are cached for one minute and rate-limited per client. Queries are capped at 120 characters. The suggestion endpoint is `GET /api/search/suggest?q=…`; the older `GET /api/address/suggest` endpoint remains for address-only clients. Postcode overviews are available at `GET /postcode/{code}`.
+- Heavy indexes live in `db/indexes.sql` and are applied by `bin/migrate`; the server only warns at startup if they are missing. The materialised suburb/street/postcode tables are built in the background with retries and a configurable `-stats-timeout`. Their build status is shown on the suburb page and available from `GET /readyz`.
+- Loss-making resale pages sort, filter and paginate in SQL instead of loading every loss into memory.
 - `property_type` comes from the modern PSI purpose field where available; older PSI records may contain historical type codes (for example `TE`). `land_area` is normalized to square metres, with historical hectare/acre values converted.
 - Suburb median statistics default to the last 12 months. If that window has fewer than 20 sales, the page falls back to 5 years and then all time, with a note explaining the fallback.
 - The 1-year/5-year/10-year change columns compare the latest 12-month average sale price with the 12-month average ending 1, 5 or 10 years ago. A dash means there is not enough recorded sales history in one of the comparison periods.
 - Loss-making resales compare the latest recorded sale with the immediately previous recorded sale. Values are nominal, same-day resales are excluded, and records are linked by property ID or identical address. Drops over 80% are flagged as "Check data" because partial titles, related-party transfers or data errors can produce extreme values.
 - Uploaded/crowdsourced sales are unauthenticated. Production deployments should add authentication, moderation and durable rate limiting (for example a shared store rather than the in-memory limiter).
 - The downloader's browser-clearance path is provided for the documented bulk PSI workflow. Review the source site's terms before using automated downloads.
+- Import failures are recorded per input file in `import_runs`; use `-fail-fast` when a partial import should abort immediately. The importer exits non-zero when any file or batch failed.
 
 ---
 
