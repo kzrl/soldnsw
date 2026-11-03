@@ -122,3 +122,68 @@ func TestRefreshSuburbStatUpdatesPriceChanges(t *testing.T) {
 		t.Errorf("change_1y = %+v, want 20", change1y)
 	}
 }
+
+func TestStreetStatsGroupsMatchLiveQuery(t *testing.T) {
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "street_stats.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(SchemaSQL); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO gnaf_properties (gnaf_pid, street_number, street_name, street_type, suburb, state, postcode) VALUES
+			('P1', '1', 'GEORGE', 'ST', 'SYDNEY', 'NSW', '2000'),
+			('P2', '2', 'GEORGE', 'ST', 'SYDNEY', 'NSW', '2000'),
+			('P3', '1', 'GEORGES', 'RD', 'SYDNEY', 'NSW', '2000'),
+			('P4', '1', 'GEORGE', 'ST', 'PARRAMATTA', 'NSW', '2150')
+	`); err != nil {
+		t.Fatalf("seed properties: %v", err)
+	}
+	if err := RefreshStreetStats(context.Background(), db); err != nil {
+		t.Fatalf("refresh street stats: %v", err)
+	}
+
+	q := New(db)
+	ctx := context.Background()
+	statsTotal, err := q.CountStreetStatsGroups(ctx, CountStreetStatsGroupsParams{StreetPattern: "GEORGE%"})
+	if err != nil {
+		t.Fatalf("count stats groups: %v", err)
+	}
+	liveTotal, err := q.CountStreetGroups(ctx, CountStreetGroupsParams{StreetPattern: "GEORGE%"})
+	if err != nil {
+		t.Fatalf("count live groups: %v", err)
+	}
+	if statsTotal != liveTotal || statsTotal != 3 {
+		t.Fatalf("group totals: stats=%d live=%d want=3", statsTotal, liveTotal)
+	}
+
+	rows, err := q.SearchStreetStatsGroups(ctx, SearchStreetStatsGroupsParams{
+		StreetPattern: "GEORGE%",
+		ExactStreet:   "GEORGES",
+		RowLimit:      10,
+	})
+	if err != nil {
+		t.Fatalf("search stats groups: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("stats rows = %d, want 3", len(rows))
+	}
+	if rows[0].StreetName != "GEORGES" {
+		t.Errorf("exact street ordering: first row = %s, want GEORGES", rows[0].StreetName)
+	}
+
+	filtered, err := q.SearchStreetStatsGroups(ctx, SearchStreetStatsGroupsParams{
+		StreetPattern: "GEORGE%",
+		Suburb:        "PARRAMATTA",
+		RowLimit:      10,
+	})
+	if err != nil {
+		t.Fatalf("search filtered stats groups: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].Suburb != "PARRAMATTA" || filtered[0].PropertyCount != 1 {
+		t.Errorf("suburb filter = %+v, want one PARRAMATTA row with count 1", filtered)
+	}
+}

@@ -5,6 +5,7 @@ CREATE INDEX IF NOT EXISTS idx_gnaf_suburb_state ON gnaf_properties(suburb, stat
 CREATE INDEX IF NOT EXISTS idx_gnaf_state ON gnaf_properties(state);
 CREATE INDEX IF NOT EXISTS idx_gnaf_street ON gnaf_properties(street_name);
 CREATE INDEX IF NOT EXISTS idx_gnaf_postcode ON gnaf_properties(postcode);
+CREATE INDEX IF NOT EXISTS idx_gnaf_base_pid ON gnaf_properties(base_pid);
 CREATE INDEX IF NOT EXISTS idx_gnaf_street_group ON gnaf_properties(street_name, street_type, suburb, state, postcode);
 CREATE INDEX IF NOT EXISTS idx_gnaf_postcode_street ON gnaf_properties(postcode, street_name, street_type, suburb);
 CREATE INDEX IF NOT EXISTS idx_sales_lookup ON property_sales(gnaf_pid, settlement_date DESC);

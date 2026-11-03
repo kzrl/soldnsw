@@ -1251,6 +1251,24 @@ func (app *App) renderSearchErrorStatus(w http.ResponseWriter, r *http.Request, 
 	app.renderTemplateStatus(w, templateName, data, status)
 }
 
+// clampResultPage returns page clamped to the range implied by total.
+func clampResultPage(page int, total int64, pageSize int) int {
+	if pageSize <= 0 {
+		pageSize = 1
+	}
+	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page < 1 {
+		return 1
+	}
+	if page > totalPages {
+		return totalPages
+	}
+	return page
+}
+
 // setSearchPagination populates the shared pager fields for a result set.
 func setSearchPagination(data *PageData, page int, total int64, pageSize int) {
 	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
@@ -1295,6 +1313,46 @@ func (app *App) findStreetGroupsPage(ctx context.Context, parsed database.Parsed
 	if len(parsed.StreetName) < 2 || pattern == "" || pattern == "%" {
 		return nil, 0, nil
 	}
+
+	// street_stats is built from the same canonical-property grouping, so
+	// serving the group list from it avoids scanning gnaf_properties on every
+	// street search. Fall back to the live query while the stats table is
+	// being built, or when it has no matching rows.
+	statsTotal, statsErr := app.queries.CountStreetStatsGroups(ctx, database.CountStreetStatsGroupsParams{
+		StreetPattern: pattern,
+		StreetType:    parsed.StreetType,
+		Suburb:        parsed.Suburb,
+		State:         parsed.State,
+		Postcode:      parsed.Postcode,
+	})
+	if statsErr == nil && statsTotal > 0 {
+		page = clampResultPage(page, statsTotal, pageSize)
+		statsRows, err := app.queries.SearchStreetStatsGroups(ctx, database.SearchStreetStatsGroupsParams{
+			StreetPattern: pattern,
+			ExactStreet:   parsed.StreetName,
+			StreetType:    parsed.StreetType,
+			Suburb:        parsed.Suburb,
+			State:         parsed.State,
+			Postcode:      parsed.Postcode,
+			RowOffset:     int64((page - 1) * pageSize),
+			RowLimit:      int64(pageSize),
+		})
+		if err == nil {
+			groups := make([]database.SearchStreetGroupsRow, len(statsRows))
+			for i, row := range statsRows {
+				groups[i] = database.SearchStreetGroupsRow{
+					StreetName:    row.StreetName,
+					StreetType:    row.StreetType,
+					Suburb:        row.Suburb,
+					State:         row.State,
+					Postcode:      row.Postcode,
+					PropertyCount: row.PropertyCount,
+				}
+			}
+			return groups, statsTotal, nil
+		}
+	}
+
 	params := database.SearchStreetGroupsParams{
 		StreetPattern: pattern,
 		ExactStreet:   parsed.StreetName,
@@ -1313,16 +1371,7 @@ func (app *App) findStreetGroupsPage(ctx context.Context, parsed database.Parsed
 	if err != nil {
 		return nil, 0, err
 	}
-	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
-	if totalPages < 1 {
-		totalPages = 1
-	}
-	if page < 1 {
-		page = 1
-	}
-	if page > totalPages {
-		page = totalPages
-	}
+	page = clampResultPage(page, total, pageSize)
 	params.RowOffset = int64((page - 1) * pageSize)
 	params.RowLimit = int64(pageSize)
 	groups, err := app.queries.SearchStreetGroups(ctx, params)
@@ -1565,6 +1614,10 @@ func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 	address := strings.TrimSpace(r.URL.Query().Get("address"))
 	if len([]rune(address)) > maxSearchQueryLength {
 		app.renderSearchErrorStatus(w, r, "index.html", "Search query too long - SoldNSW", "Search queries must be 120 characters or fewer.", http.StatusBadRequest)
+		return
+	}
+	if address != "" && len([]rune(address)) < 2 {
+		app.renderSearchErrorStatus(w, r, "index.html", "Search query too short - SoldNSW", "Enter at least two characters, or add a suburb or postcode.", http.StatusBadRequest)
 		return
 	}
 	suburb := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("suburb")))
@@ -2102,23 +2155,21 @@ func (app *App) handleSuburbAnalytics(w http.ResponseWriter, r *http.Request) {
 		}
 		data.SuburbSales = suburbSales
 
-		monthly, err := app.queries.GetSuburbMonthlyAverages(ctx, database.GetSuburbMonthlyAveragesParams{
-			Suburb: suburb,
-			State:  state,
-		})
-		if err != nil {
-			log.Printf("Error fetching suburb monthly averages: %v", err)
-		}
 		cutoff := ""
 		if chartRange != "all" {
 			if years, err := strconv.Atoi(chartRange); err == nil {
 				cutoff = time.Now().AddDate(-years, 0, 0).Format("2006-01")
 			}
 		}
+		monthly, err := app.queries.GetSuburbMonthlyAverages(ctx, database.GetSuburbMonthlyAveragesParams{
+			Suburb: suburb,
+			State:  state,
+			Cutoff: cutoff,
+		})
+		if err != nil {
+			log.Printf("Error fetching suburb monthly averages: %v", err)
+		}
 		for _, m := range monthly {
-			if cutoff != "" && m.Month < cutoff {
-				continue
-			}
 			data.ChartLabels = append(data.ChartLabels, m.Month)
 			data.ChartValues = append(data.ChartValues, m.AvgPrice)
 		}
@@ -2140,16 +2191,17 @@ func (app *App) handleSuburbAnalytics(w http.ResponseWriter, r *http.Request) {
 	} else if suburb == "" {
 		// The whole-market overview is read from the materialised
 		// suburb_stats table, so this is cheap even on a cold start.
-		overview, err := app.queries.GetSuburbOverviewStats(ctx)
+		// Rendering every suburb produces a ~10MB page on the full NSW PSI
+		// dataset. The query is ordered by sales volume, so only fetch the
+		// leaders; the window count keeps the true total for the notice.
+		const overviewLimit = 200
+		overview, err := app.queries.GetSuburbOverviewStats(ctx, overviewLimit)
 		if err != nil {
 			log.Printf("Error fetching overview stats: %v", err)
 		}
 		data.OverviewTotal = len(overview)
-		// Rendering every suburb produces a ~10MB page on the full NSW PSI
-		// dataset. The query is ordered by sales volume, so show the leaders.
-		const overviewLimit = 200
-		if len(overview) > overviewLimit {
-			overview = overview[:overviewLimit]
+		if len(overview) > 0 {
+			data.OverviewTotal = int(overview[0].TotalCount)
 		}
 		data.OverviewStats = overview
 	}
@@ -2217,20 +2269,6 @@ func (app *App) handleSuburbLosses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	summary, err := app.queries.GetSuburbLossSummary(ctx, database.GetSuburbLossSummaryParams{
-		Cutoff: lossCutoff(rangeValue),
-		Suburb: suburb,
-		State:  state,
-	})
-	if err != nil {
-		log.Printf("Error fetching loss summary for %s: %v", suburb, err)
-	} else {
-		data.LossSummary = &summary
-		if summary.Resales > 0 {
-			data.LossRate = float64(summary.Losses) / float64(summary.Resales) * 100
-		}
-	}
-
 	typeRows, err := app.queries.GetSuburbLossTypeSummary(ctx, database.GetSuburbLossTypeSummaryParams{
 		Cutoff: lossCutoff(rangeValue),
 		Suburb: suburb,
@@ -2239,19 +2277,33 @@ func (app *App) handleSuburbLosses(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Error fetching loss type summary for %s: %v", suburb, err)
 	}
+
+	// The per-dwelling rows contain every resale, so the overall summary and
+	// the filtered total can be derived from them instead of re-running the
+	// same resale window query two more times.
+	summary := database.GetSuburbLossSummaryRow{}
+	for _, row := range typeRows {
+		summary.Resales += row.Resales
+		summary.Losses += row.Losses
+		summary.TotalLoss += row.TotalLoss
+		if row.LargestLoss < summary.LargestLoss {
+			summary.LargestLoss = row.LargestLoss
+		}
+	}
+	if summary.Losses > 0 {
+		summary.AverageLoss = summary.TotalLoss / summary.Losses
+	}
+	data.LossSummary = &summary
+	if summary.Resales > 0 {
+		data.LossRate = float64(summary.Losses) / float64(summary.Resales) * 100
+	}
+
 	typeCounts := map[string]*LossTypeCount{
-		"all":       {Key: "all", Label: "All"},
+		"all":       {Key: "all", Label: "All", Losses: summary.Losses, Resales: summary.Resales},
 		"house":     {Key: "house", Label: "Houses"},
 		"unit":      {Key: "unit", Label: "Units"},
 		"townhouse": {Key: "townhouse", Label: "Townhouses"},
 		"other":     {Key: "other", Label: "Other / unknown"},
-	}
-	if summary.Losses >= 0 {
-		typeCounts["all"].Losses = summary.Losses
-		typeCounts["all"].Resales = summary.Resales
-		if summary.Resales > 0 {
-			typeCounts["all"].Rate = float64(summary.Losses) / float64(summary.Resales) * 100
-		}
 	}
 	for _, row := range typeRows {
 		key := row.DwellingType
@@ -2278,14 +2330,12 @@ func (app *App) handleSuburbLosses(w http.ResponseWriter, r *http.Request) {
 	if dwellingFilter == "all" {
 		dwellingFilter = ""
 	}
-	total, err := app.queries.CountSuburbLosses(ctx, database.CountSuburbLossesParams{
-		Cutoff:       lossCutoff(rangeValue),
-		DwellingType: dwellingFilter,
-		Suburb:       suburb,
-		State:        state,
-	})
-	if err != nil {
-		log.Printf("Error counting losses for %s: %v", suburb, err)
+	total := summary.Losses
+	switch lossType {
+	case "house", "unit", "townhouse":
+		total = typeCounts[lossType].Losses
+	case "other":
+		total = typeCounts["other"].Losses
 	}
 	data.LossTotal = total
 	setSearchPagination(&data, page, total, suburbSalesPageSize)

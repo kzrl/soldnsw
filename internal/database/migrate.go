@@ -63,8 +63,5 @@ func EnsurePropertyColumns(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("add dwelling_type: %w", err)
 		}
 	}
-	if _, err := db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_gnaf_base_pid ON gnaf_properties(base_pid)"); err != nil {
-		return fmt.Errorf("add base_pid index: %w", err)
-	}
 	return nil
 }

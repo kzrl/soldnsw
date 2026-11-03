@@ -125,57 +125,31 @@ func (q *Queries) CountStreetProperties(ctx context.Context, arg CountStreetProp
 	return count, err
 }
 
-const countSuburbLosses = `-- name: CountSuburbLosses :one
-WITH base AS (
-    SELECT
-        cs.canonical_pid AS property_key,
-        cs.settlement_date,
-        cs.sale_price,
-        cs.sale_id,
-        CAST(COALESCE(NULLIF(p.dwelling_type, ''), 'unknown') AS TEXT) AS dwelling_type
-    FROM canonical_sales cs
-    JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
-    WHERE cs.suburb = UPPER(?3) AND cs.state = UPPER(?4)
-), ordered AS (
-    SELECT
-        property_key, settlement_date, sale_price, sale_id, dwelling_type,
-        LAG(sale_price) OVER w AS previous_price,
-        LAG(settlement_date) OVER w AS previous_date,
-        ROW_NUMBER() OVER (
-            PARTITION BY property_key
-            ORDER BY settlement_date DESC, sale_id DESC
-        ) AS rn
-    FROM base
-    WINDOW w AS (
-        PARTITION BY property_key
-        ORDER BY settlement_date ASC, sale_id ASC
-    )
-)
+const countStreetStatsGroups = `-- name: CountStreetStatsGroups :one
 SELECT COUNT(*)
-FROM ordered
-WHERE rn = 1
-    AND previous_price IS NOT NULL
-    AND previous_date < settlement_date
-    AND sale_price < previous_price
-    AND settlement_date >= ?1
-    AND (CAST(?2 AS TEXT) = ''
-         OR dwelling_type = CAST(?2 AS TEXT)
-         OR (CAST(?2 AS TEXT) = 'other' AND dwelling_type = 'unknown'))
+FROM street_stats
+WHERE street_name LIKE ?1
+  AND (CAST(?2 AS TEXT) = '' OR street_type = UPPER(CAST(?2 AS TEXT)))
+  AND (CAST(?3 AS TEXT) = '' OR suburb = UPPER(CAST(?3 AS TEXT)))
+  AND (CAST(?4 AS TEXT) = '' OR state = UPPER(CAST(?4 AS TEXT)))
+  AND (CAST(?5 AS TEXT) = '' OR postcode = CAST(?5 AS TEXT))
 `
 
-type CountSuburbLossesParams struct {
-	Cutoff       string
-	DwellingType string
-	Suburb       string
-	State        string
+type CountStreetStatsGroupsParams struct {
+	StreetPattern string
+	StreetType    string
+	Suburb        string
+	State         string
+	Postcode      string
 }
 
-func (q *Queries) CountSuburbLosses(ctx context.Context, arg CountSuburbLossesParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countSuburbLosses,
-		arg.Cutoff,
-		arg.DwellingType,
+func (q *Queries) CountStreetStatsGroups(ctx context.Context, arg CountStreetStatsGroupsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countStreetStatsGroups,
+		arg.StreetPattern,
+		arg.StreetType,
 		arg.Suburb,
 		arg.State,
+		arg.Postcode,
 	)
 	var count int64
 	err := row.Scan(&count)
@@ -208,7 +182,10 @@ SELECT
     (SELECT COUNT(*) FROM property_sales s2 WHERE s2.gnaf_pid = p.gnaf_pid) AS sales_count
 FROM gnaf_properties p
 WHERE p.base_pid = ?
-ORDER BY p.street_number, p.gnaf_pid
+ORDER BY CASE WHEN p.street_number IS NULL OR TRIM(p.street_number) = '' THEN 1 ELSE 0 END,
+         CAST(REPLACE(p.street_number, ' ', '') AS INTEGER),
+         p.street_number,
+         p.gnaf_pid
 `
 
 type GetBuildingUnitsByBasePIDRow struct {
@@ -253,42 +230,6 @@ func (q *Queries) GetBuildingUnitsByBasePID(ctx context.Context, basePid sql.Nul
 			&i.LatestSalePrice,
 			&i.SalesCount,
 		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const getDistinctSuburbs = `-- name: GetDistinctSuburbs :many
-SELECT suburb, state, MIN(postcode) AS postcode
-FROM gnaf_properties
-GROUP BY suburb, state
-ORDER BY suburb ASC, state ASC
-`
-
-type GetDistinctSuburbsRow struct {
-	Suburb   string
-	State    string
-	Postcode interface{}
-}
-
-func (q *Queries) GetDistinctSuburbs(ctx context.Context) ([]GetDistinctSuburbsRow, error) {
-	rows, err := q.db.QueryContext(ctx, getDistinctSuburbs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GetDistinctSuburbsRow
-	for rows.Next() {
-		var i GetDistinctSuburbsRow
-		if err := rows.Scan(&i.Suburb, &i.State, &i.Postcode); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -447,7 +388,10 @@ func (q *Queries) GetPostcodeSummary(ctx context.Context, postcode string) (GetP
 const getPropertyByBasePID = `-- name: GetPropertyByBasePID :one
 SELECT gnaf_pid, street_number, street_name, street_type, suburb, state, postcode, latitude, longitude, lot_number, plan_number, property_type, land_area, base_pid, dwelling_type FROM gnaf_properties
 WHERE base_pid = ?
-ORDER BY gnaf_pid
+ORDER BY CASE WHEN street_number IS NULL OR TRIM(street_number) = '' THEN 1 ELSE 0 END,
+         CAST(REPLACE(street_number, ' ', '') AS INTEGER),
+         street_number,
+         gnaf_pid
 LIMIT 1
 `
 
@@ -845,22 +789,22 @@ SELECT
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN 1
     END) AS losses,
-    COALESCE(SUM(CASE
+    CAST(COALESCE(SUM(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN sale_price - previous_price
         ELSE 0
-    END), 0) AS total_loss,
+    END), 0) AS INTEGER) AS total_loss,
     CAST(COALESCE(AVG(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN sale_price - previous_price
     END), 0) AS INTEGER) AS average_loss,
-    COALESCE(MIN(CASE
+    CAST(COALESCE(MIN(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN sale_price - previous_price
-    END), 0) AS largest_loss
+    END), 0) AS INTEGER) AS largest_loss
 FROM ordered
 `
 
@@ -873,9 +817,9 @@ type GetSuburbLossSummaryParams struct {
 type GetSuburbLossSummaryRow struct {
 	Resales     int64
 	Losses      int64
-	TotalLoss   interface{}
+	TotalLoss   int64
 	AverageLoss int64
-	LargestLoss interface{}
+	LargestLoss int64
 }
 
 func (q *Queries) GetSuburbLossSummary(ctx context.Context, arg GetSuburbLossSummaryParams) (GetSuburbLossSummaryRow, error) {
@@ -929,16 +873,21 @@ SELECT
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN 1
     END) AS losses,
-    COALESCE(SUM(CASE
+    CAST(COALESCE(SUM(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN sale_price - previous_price ELSE 0
-    END), 0) AS total_loss,
+    END), 0) AS INTEGER) AS total_loss,
     CAST(COALESCE(AVG(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN sale_price - previous_price
-    END), 0) AS INTEGER) AS average_loss
+    END), 0) AS INTEGER) AS average_loss,
+    CAST(COALESCE(MIN(CASE
+        WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
+             AND sale_price < previous_price AND settlement_date >= ?1
+        THEN sale_price - previous_price
+    END), 0) AS INTEGER) AS largest_loss
 FROM ordered
 GROUP BY dwelling_type
 `
@@ -953,8 +902,9 @@ type GetSuburbLossTypeSummaryRow struct {
 	DwellingType string
 	Resales      int64
 	Losses       int64
-	TotalLoss    interface{}
+	TotalLoss    int64
 	AverageLoss  int64
+	LargestLoss  int64
 }
 
 func (q *Queries) GetSuburbLossTypeSummary(ctx context.Context, arg GetSuburbLossTypeSummaryParams) ([]GetSuburbLossTypeSummaryRow, error) {
@@ -972,6 +922,7 @@ func (q *Queries) GetSuburbLossTypeSummary(ctx context.Context, arg GetSuburbLos
 			&i.Losses,
 			&i.TotalLoss,
 			&i.AverageLoss,
+			&i.LargestLoss,
 		); err != nil {
 			return nil, err
 		}
@@ -1160,6 +1111,7 @@ SELECT
     COUNT(*) AS sales_count
 FROM canonical_sales cs
 WHERE cs.suburb = UPPER(?1) AND cs.state = UPPER(?2)
+  AND (CAST(COALESCE(?3, '') AS TEXT) = '' OR cs.settlement_date >= ?3)
 GROUP BY month
 ORDER BY month ASC
 `
@@ -1167,6 +1119,7 @@ ORDER BY month ASC
 type GetSuburbMonthlyAveragesParams struct {
 	Suburb string
 	State  string
+	Cutoff string
 }
 
 type GetSuburbMonthlyAveragesRow struct {
@@ -1176,7 +1129,7 @@ type GetSuburbMonthlyAveragesRow struct {
 }
 
 func (q *Queries) GetSuburbMonthlyAverages(ctx context.Context, arg GetSuburbMonthlyAveragesParams) ([]GetSuburbMonthlyAveragesRow, error) {
-	rows, err := q.db.QueryContext(ctx, getSuburbMonthlyAverages, arg.Suburb, arg.State)
+	rows, err := q.db.QueryContext(ctx, getSuburbMonthlyAverages, arg.Suburb, arg.State, arg.Cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -1200,9 +1153,11 @@ func (q *Queries) GetSuburbMonthlyAverages(ctx context.Context, arg GetSuburbMon
 
 const getSuburbOverviewStats = `-- name: GetSuburbOverviewStats :many
 SELECT suburb, state, property_count, sales_count, avg_price, max_price, min_price,
-       change_1y, change_5y, change_10y
+       change_1y, change_5y, change_10y,
+       COUNT(*) OVER () AS total_count
 FROM suburb_stats
 ORDER BY sales_count DESC, suburb ASC
+LIMIT ?1
 `
 
 type GetSuburbOverviewStatsRow struct {
@@ -1216,10 +1171,11 @@ type GetSuburbOverviewStatsRow struct {
 	Change1y      sql.NullFloat64
 	Change5y      sql.NullFloat64
 	Change10y     sql.NullFloat64
+	TotalCount    int64
 }
 
-func (q *Queries) GetSuburbOverviewStats(ctx context.Context) ([]GetSuburbOverviewStatsRow, error) {
-	rows, err := q.db.QueryContext(ctx, getSuburbOverviewStats)
+func (q *Queries) GetSuburbOverviewStats(ctx context.Context, rowLimit int64) ([]GetSuburbOverviewStatsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getSuburbOverviewStats, rowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -1238,6 +1194,7 @@ func (q *Queries) GetSuburbOverviewStats(ctx context.Context) ([]GetSuburbOvervi
 			&i.Change1y,
 			&i.Change5y,
 			&i.Change10y,
+			&i.TotalCount,
 		); err != nil {
 			return nil, err
 		}
@@ -1747,101 +1704,6 @@ func (q *Queries) ListStreetProperties(ctx context.Context, arg ListStreetProper
 	return items, nil
 }
 
-const searchPropertiesByAddress = `-- name: SearchPropertiesByAddress :many
-SELECT gnaf_pid, street_number, street_name, street_type, suburb, state, postcode, latitude, longitude, lot_number, plan_number, property_type, land_area, base_pid, dwelling_type FROM gnaf_properties
-WHERE suburb = UPPER(?1) AND street_name LIKE UPPER(?2) || '%'
-LIMIT 50
-`
-
-type SearchPropertiesByAddressParams struct {
-	Suburb     string
-	StreetName string
-}
-
-func (q *Queries) SearchPropertiesByAddress(ctx context.Context, arg SearchPropertiesByAddressParams) ([]GnafProperty, error) {
-	rows, err := q.db.QueryContext(ctx, searchPropertiesByAddress, arg.Suburb, arg.StreetName)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GnafProperty
-	for rows.Next() {
-		var i GnafProperty
-		if err := rows.Scan(
-			&i.GnafPid,
-			&i.StreetNumber,
-			&i.StreetName,
-			&i.StreetType,
-			&i.Suburb,
-			&i.State,
-			&i.Postcode,
-			&i.Latitude,
-			&i.Longitude,
-			&i.LotNumber,
-			&i.PlanNumber,
-			&i.PropertyType,
-			&i.LandArea,
-			&i.BasePid,
-			&i.DwellingType,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const searchPropertiesBySuburb = `-- name: SearchPropertiesBySuburb :many
-SELECT gnaf_pid, street_number, street_name, street_type, suburb, state, postcode, latitude, longitude, lot_number, plan_number, property_type, land_area, base_pid, dwelling_type FROM gnaf_properties
-WHERE suburb = UPPER(?1)
-LIMIT 50
-`
-
-func (q *Queries) SearchPropertiesBySuburb(ctx context.Context, suburb string) ([]GnafProperty, error) {
-	rows, err := q.db.QueryContext(ctx, searchPropertiesBySuburb, suburb)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []GnafProperty
-	for rows.Next() {
-		var i GnafProperty
-		if err := rows.Scan(
-			&i.GnafPid,
-			&i.StreetNumber,
-			&i.StreetName,
-			&i.StreetType,
-			&i.Suburb,
-			&i.State,
-			&i.Postcode,
-			&i.Latitude,
-			&i.Longitude,
-			&i.LotNumber,
-			&i.PlanNumber,
-			&i.PropertyType,
-			&i.LandArea,
-			&i.BasePid,
-			&i.DwellingType,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const searchPropertiesFlexible = `-- name: SearchPropertiesFlexible :many
 SELECT p.gnaf_pid, p.street_number, p.street_name, p.street_type, p.suburb, p.state, p.postcode, p.latitude, p.longitude, p.lot_number, p.plan_number, p.property_type, p.land_area, p.base_pid, p.dwelling_type FROM gnaf_properties p
 LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
@@ -1864,8 +1726,6 @@ WHERE (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
   )
   AND (CAST(?9 AS INTEGER) = 0
        OR EXISTS (SELECT 1 FROM canonical_sales cs WHERE cs.canonical_pid = p.gnaf_pid))
-  AND (CAST(?1 AS TEXT) = '' OR TRUE)
-  AND (CAST(?2 AS TEXT) = '' OR TRUE)
 ORDER BY
   CASE
     WHEN sort_params.number_exact_key <> '' AND UPPER(REPLACE(p.street_number, ' ', '')) = sort_params.number_exact_key THEN 0
@@ -1957,16 +1817,16 @@ SELECT
     COUNT(*) AS property_count
 FROM gnaf_properties p
 LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
+CROSS JOIN (SELECT CAST(?1 AS TEXT) AS exact_street) exact_params
 WHERE (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
-  AND p.street_name LIKE ?1
-  AND (CAST(?2 AS TEXT) = '' OR TRUE)
+  AND p.street_name LIKE ?2
   AND (CAST(?3 AS TEXT) = '' OR p.street_type = UPPER(CAST(?3 AS TEXT)))
   AND (CAST(?4 AS TEXT) = '' OR p.suburb = UPPER(CAST(?4 AS TEXT)))
   AND (CAST(?5 AS TEXT) = '' OR p.state = UPPER(CAST(?5 AS TEXT)))
   AND (CAST(?6 AS TEXT) = '' OR p.postcode = CAST(?6 AS TEXT))
 GROUP BY p.street_name, p.street_type, p.suburb, p.state, p.postcode
 ORDER BY
-  CASE WHEN p.street_name = UPPER(CAST(@exact_street AS TEXT)) AND CAST(@exact_street AS TEXT) <> '' THEN 0 ELSE 1 END,
+  CASE WHEN p.street_name = UPPER(exact_params.exact_street) AND exact_params.exact_street <> '' THEN 0 ELSE 1 END,
   property_count DESC,
   p.street_name ASC,
   p.suburb ASC,
@@ -1975,8 +1835,8 @@ LIMIT ?8 OFFSET ?7
 `
 
 type SearchStreetGroupsParams struct {
-	StreetPattern string
 	ExactStreet   string
+	StreetPattern string
 	StreetType    string
 	Suburb        string
 	State         string
@@ -1996,8 +1856,8 @@ type SearchStreetGroupsRow struct {
 
 func (q *Queries) SearchStreetGroups(ctx context.Context, arg SearchStreetGroupsParams) ([]SearchStreetGroupsRow, error) {
 	rows, err := q.db.QueryContext(ctx, searchStreetGroups,
-		arg.StreetPattern,
 		arg.ExactStreet,
+		arg.StreetPattern,
 		arg.StreetType,
 		arg.Suburb,
 		arg.State,
@@ -2033,20 +1893,97 @@ func (q *Queries) SearchStreetGroups(ctx context.Context, arg SearchStreetGroups
 	return items, nil
 }
 
+const searchStreetStatsGroups = `-- name: SearchStreetStatsGroups :many
+SELECT street_name, street_type, suburb, state, postcode, property_count
+FROM street_stats
+CROSS JOIN (SELECT CAST(?1 AS TEXT) AS exact_street) exact_params
+WHERE street_name LIKE ?2
+  AND (CAST(?3 AS TEXT) = '' OR street_type = UPPER(CAST(?3 AS TEXT)))
+  AND (CAST(?4 AS TEXT) = '' OR suburb = UPPER(CAST(?4 AS TEXT)))
+  AND (CAST(?5 AS TEXT) = '' OR state = UPPER(CAST(?5 AS TEXT)))
+  AND (CAST(?6 AS TEXT) = '' OR postcode = CAST(?6 AS TEXT))
+ORDER BY
+  CASE WHEN street_name = UPPER(exact_params.exact_street) AND exact_params.exact_street <> '' THEN 0 ELSE 1 END,
+  property_count DESC,
+  street_name ASC,
+  suburb ASC,
+  postcode ASC
+LIMIT ?8 OFFSET ?7
+`
+
+type SearchStreetStatsGroupsParams struct {
+	ExactStreet   string
+	StreetPattern string
+	StreetType    string
+	Suburb        string
+	State         string
+	Postcode      string
+	RowOffset     int64
+	RowLimit      int64
+}
+
+type SearchStreetStatsGroupsRow struct {
+	StreetName    string
+	StreetType    string
+	Suburb        string
+	State         string
+	Postcode      string
+	PropertyCount int64
+}
+
+func (q *Queries) SearchStreetStatsGroups(ctx context.Context, arg SearchStreetStatsGroupsParams) ([]SearchStreetStatsGroupsRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchStreetStatsGroups,
+		arg.ExactStreet,
+		arg.StreetPattern,
+		arg.StreetType,
+		arg.Suburb,
+		arg.State,
+		arg.Postcode,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchStreetStatsGroupsRow
+	for rows.Next() {
+		var i SearchStreetStatsGroupsRow
+		if err := rows.Scan(
+			&i.StreetName,
+			&i.StreetType,
+			&i.Suburb,
+			&i.State,
+			&i.Postcode,
+			&i.PropertyCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const suggestPostcodeStats = `-- name: SuggestPostcodeStats :many
 SELECT postcode, property_count, sample_suburb
 FROM postcode_stats
-WHERE postcode LIKE ?1
-  AND (CAST(?2 AS TEXT) = '' OR TRUE)
+CROSS JOIN (SELECT CAST(?1 AS TEXT) AS exact_postcode) exact_params
+WHERE postcode LIKE ?2
 ORDER BY
-  CASE WHEN postcode = CAST(@exact_postcode AS TEXT) THEN 0 ELSE 1 END,
+  CASE WHEN postcode = CAST(exact_params.exact_postcode AS TEXT) THEN 0 ELSE 1 END,
   postcode ASC
 LIMIT ?3
 `
 
 type SuggestPostcodeStatsParams struct {
-	PostcodePattern string
 	ExactPostcode   string
+	PostcodePattern string
 	RowLimit        int64
 }
 
@@ -2057,7 +1994,7 @@ type SuggestPostcodeStatsRow struct {
 }
 
 func (q *Queries) SuggestPostcodeStats(ctx context.Context, arg SuggestPostcodeStatsParams) ([]SuggestPostcodeStatsRow, error) {
-	rows, err := q.db.QueryContext(ctx, suggestPostcodeStats, arg.PostcodePattern, arg.ExactPostcode, arg.RowLimit)
+	rows, err := q.db.QueryContext(ctx, suggestPostcodeStats, arg.ExactPostcode, arg.PostcodePattern, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -2191,10 +2128,10 @@ func (q *Queries) SuggestStreetGroups(ctx context.Context, arg SuggestStreetGrou
 const suggestStreetStats = `-- name: SuggestStreetStats :many
 SELECT street_name, street_type, suburb, state, postcode, property_count
 FROM street_stats
-WHERE street_name LIKE ?1
-  AND (CAST(?2 AS TEXT) = '' OR TRUE)
+CROSS JOIN (SELECT CAST(?1 AS TEXT) AS exact_street) exact_params
+WHERE street_name LIKE ?2
 ORDER BY
-  CASE WHEN street_name = UPPER(CAST(@exact_street AS TEXT)) THEN 0 ELSE 1 END,
+  CASE WHEN street_name = UPPER(exact_params.exact_street) THEN 0 ELSE 1 END,
   property_count DESC,
   street_name ASC,
   suburb ASC,
@@ -2203,8 +2140,8 @@ LIMIT ?3
 `
 
 type SuggestStreetStatsParams struct {
-	StreetPattern string
 	ExactStreet   string
+	StreetPattern string
 	RowLimit      int64
 }
 
@@ -2218,7 +2155,7 @@ type SuggestStreetStatsRow struct {
 }
 
 func (q *Queries) SuggestStreetStats(ctx context.Context, arg SuggestStreetStatsParams) ([]SuggestStreetStatsRow, error) {
-	rows, err := q.db.QueryContext(ctx, suggestStreetStats, arg.StreetPattern, arg.ExactStreet, arg.RowLimit)
+	rows, err := q.db.QueryContext(ctx, suggestStreetStats, arg.ExactStreet, arg.StreetPattern, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -2250,10 +2187,10 @@ func (q *Queries) SuggestStreetStats(ctx context.Context, arg SuggestStreetStats
 const suggestSuburbs = `-- name: SuggestSuburbs :many
 SELECT suburb, state, property_count, sales_count
 FROM suburb_stats
-WHERE suburb LIKE ?1
-  AND (CAST(?2 AS TEXT) = '' OR TRUE)
+CROSS JOIN (SELECT CAST(?1 AS TEXT) AS exact_suburb) exact_params
+WHERE suburb LIKE ?2
 ORDER BY
-  CASE WHEN suburb = UPPER(CAST(@exact_suburb AS TEXT)) THEN 0 ELSE 1 END,
+  CASE WHEN suburb = UPPER(exact_params.exact_suburb) THEN 0 ELSE 1 END,
   sales_count DESC,
   suburb ASC,
   state ASC
@@ -2261,8 +2198,8 @@ LIMIT ?3
 `
 
 type SuggestSuburbsParams struct {
-	SuburbPattern string
 	ExactSuburb   string
+	SuburbPattern string
 	RowLimit      int64
 }
 
@@ -2274,7 +2211,7 @@ type SuggestSuburbsRow struct {
 }
 
 func (q *Queries) SuggestSuburbs(ctx context.Context, arg SuggestSuburbsParams) ([]SuggestSuburbsRow, error) {
-	rows, err := q.db.QueryContext(ctx, suggestSuburbs, arg.SuburbPattern, arg.ExactSuburb, arg.RowLimit)
+	rows, err := q.db.QueryContext(ctx, suggestSuburbs, arg.ExactSuburb, arg.SuburbPattern, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}

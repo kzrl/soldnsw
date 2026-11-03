@@ -1,13 +1,3 @@
--- name: SearchPropertiesByAddress :many
-SELECT * FROM gnaf_properties
-WHERE suburb = UPPER(@suburb) AND street_name LIKE UPPER(@street_name) || '%'
-LIMIT 50;
-
--- name: SearchPropertiesBySuburb :many
-SELECT * FROM gnaf_properties
-WHERE suburb = UPPER(@suburb)
-LIMIT 50;
-
 -- name: SearchPropertiesFlexible :many
 SELECT p.* FROM gnaf_properties p
 LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
@@ -30,8 +20,6 @@ WHERE (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
   )
   AND (CAST(@only_with_sales AS INTEGER) = 0
        OR EXISTS (SELECT 1 FROM canonical_sales cs WHERE cs.canonical_pid = p.gnaf_pid))
-  AND (CAST(@sort AS TEXT) = '' OR TRUE)
-  AND (CAST(@number_exact AS TEXT) = '' OR TRUE)
 ORDER BY
   CASE
     WHEN sort_params.number_exact_key <> '' AND UPPER(REPLACE(p.street_number, ' ', '')) = sort_params.number_exact_key THEN 0
@@ -82,6 +70,7 @@ SELECT
     COUNT(*) AS sales_count
 FROM canonical_sales cs
 WHERE cs.suburb = UPPER(@suburb) AND cs.state = UPPER(@state)
+  AND (CAST(COALESCE(@cutoff, '') AS TEXT) = '' OR cs.settlement_date >= @cutoff)
 GROUP BY month
 ORDER BY month ASC;
 
@@ -92,7 +81,10 @@ WHERE gnaf_pid = ? LIMIT 1;
 -- name: GetPropertyByBasePID :one
 SELECT * FROM gnaf_properties
 WHERE base_pid = ?
-ORDER BY gnaf_pid
+ORDER BY CASE WHEN street_number IS NULL OR TRIM(street_number) = '' THEN 1 ELSE 0 END,
+         CAST(REPLACE(street_number, ' ', '') AS INTEGER),
+         street_number,
+         gnaf_pid
 LIMIT 1;
 
 -- name: GetSalesHistoryByPID :many
@@ -175,17 +167,13 @@ JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
 ORDER BY cs.settlement_date DESC, cs.sale_id DESC
 LIMIT 25;
 
--- name: GetDistinctSuburbs :many
-SELECT suburb, state, MIN(postcode) AS postcode
-FROM gnaf_properties
-GROUP BY suburb, state
-ORDER BY suburb ASC, state ASC;
-
 -- name: GetSuburbOverviewStats :many
 SELECT suburb, state, property_count, sales_count, avg_price, max_price, min_price,
-       change_1y, change_5y, change_10y
+       change_1y, change_5y, change_10y,
+       COUNT(*) OVER () AS total_count
 FROM suburb_stats
-ORDER BY sales_count DESC, suburb ASC;
+ORDER BY sales_count DESC, suburb ASC
+LIMIT @row_limit;
 
 -- name: GetTotalPropertiesCount :one
 SELECT CAST(COALESCE(SUM(property_count), 0) AS INTEGER) FROM suburb_stats;
@@ -243,22 +231,22 @@ SELECT
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN 1
     END) AS losses,
-    COALESCE(SUM(CASE
+    CAST(COALESCE(SUM(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN sale_price - previous_price
         ELSE 0
-    END), 0) AS total_loss,
+    END), 0) AS INTEGER) AS total_loss,
     CAST(COALESCE(AVG(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN sale_price - previous_price
     END), 0) AS INTEGER) AS average_loss,
-    COALESCE(MIN(CASE
+    CAST(COALESCE(MIN(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN sale_price - previous_price
-    END), 0) AS largest_loss
+    END), 0) AS INTEGER) AS largest_loss
 FROM ordered;
 
 -- name: GetSuburbLossTypeSummary :many
@@ -299,16 +287,21 @@ SELECT
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN 1
     END) AS losses,
-    COALESCE(SUM(CASE
+    CAST(COALESCE(SUM(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN sale_price - previous_price ELSE 0
-    END), 0) AS total_loss,
+    END), 0) AS INTEGER) AS total_loss,
     CAST(COALESCE(AVG(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN sale_price - previous_price
-    END), 0) AS INTEGER) AS average_loss
+    END), 0) AS INTEGER) AS average_loss,
+    CAST(COALESCE(MIN(CASE
+        WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
+             AND sale_price < previous_price AND settlement_date >= @cutoff
+        THEN sale_price - previous_price
+    END), 0) AS INTEGER) AS largest_loss
 FROM ordered
 GROUP BY dwelling_type;
 
@@ -401,43 +394,6 @@ ORDER BY
     l.settlement_date DESC
 LIMIT @row_limit OFFSET @row_offset;
 
--- name: CountSuburbLosses :one
-WITH base AS (
-    SELECT
-        cs.canonical_pid AS property_key,
-        cs.settlement_date,
-        cs.sale_price,
-        cs.sale_id,
-        CAST(COALESCE(NULLIF(p.dwelling_type, ''), 'unknown') AS TEXT) AS dwelling_type
-    FROM canonical_sales cs
-    JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
-    WHERE cs.suburb = UPPER(@suburb) AND cs.state = UPPER(@state)
-), ordered AS (
-    SELECT
-        *,
-        LAG(sale_price) OVER w AS previous_price,
-        LAG(settlement_date) OVER w AS previous_date,
-        ROW_NUMBER() OVER (
-            PARTITION BY property_key
-            ORDER BY settlement_date DESC, sale_id DESC
-        ) AS rn
-    FROM base
-    WINDOW w AS (
-        PARTITION BY property_key
-        ORDER BY settlement_date ASC, sale_id ASC
-    )
-)
-SELECT COUNT(*)
-FROM ordered
-WHERE rn = 1
-    AND previous_price IS NOT NULL
-    AND previous_date < settlement_date
-    AND sale_price < previous_price
-    AND settlement_date >= @cutoff
-    AND (CAST(@dwelling_type AS TEXT) = ''
-         OR dwelling_type = CAST(@dwelling_type AS TEXT)
-         OR (CAST(@dwelling_type AS TEXT) = 'other' AND dwelling_type = 'unknown'));
-
 -- name: GetSuburbExtremeSales :many
 SELECT kind, sale_id, gnaf_pid, settlement_date, sale_price, street_number, street_name, street_type
 FROM (
@@ -492,7 +448,10 @@ SELECT
     (SELECT COUNT(*) FROM property_sales s2 WHERE s2.gnaf_pid = p.gnaf_pid) AS sales_count
 FROM gnaf_properties p
 WHERE p.base_pid = ?
-ORDER BY p.street_number, p.gnaf_pid;
+ORDER BY CASE WHEN p.street_number IS NULL OR TRIM(p.street_number) = '' THEN 1 ELSE 0 END,
+         CAST(REPLACE(p.street_number, ' ', '') AS INTEGER),
+         p.street_number,
+         p.gnaf_pid;
 
 -- name: SearchStreetGroups :many
 SELECT
@@ -504,21 +463,47 @@ SELECT
     COUNT(*) AS property_count
 FROM gnaf_properties p
 LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
+CROSS JOIN (SELECT CAST(@exact_street AS TEXT) AS exact_street) exact_params
 WHERE (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
   AND p.street_name LIKE @street_pattern
-  AND (CAST(@exact_street AS TEXT) = '' OR TRUE)
   AND (CAST(@street_type AS TEXT) = '' OR p.street_type = UPPER(CAST(@street_type AS TEXT)))
   AND (CAST(@suburb AS TEXT) = '' OR p.suburb = UPPER(CAST(@suburb AS TEXT)))
   AND (CAST(@state AS TEXT) = '' OR p.state = UPPER(CAST(@state AS TEXT)))
   AND (CAST(@postcode AS TEXT) = '' OR p.postcode = CAST(@postcode AS TEXT))
 GROUP BY p.street_name, p.street_type, p.suburb, p.state, p.postcode
 ORDER BY
-  CASE WHEN p.street_name = UPPER(CAST(@exact_street AS TEXT)) AND CAST(@exact_street AS TEXT) <> '' THEN 0 ELSE 1 END,
+  CASE WHEN p.street_name = UPPER(exact_params.exact_street) AND exact_params.exact_street <> '' THEN 0 ELSE 1 END,
   property_count DESC,
   p.street_name ASC,
   p.suburb ASC,
   p.postcode ASC
 LIMIT @row_limit OFFSET @row_offset;
+
+-- name: SearchStreetStatsGroups :many
+SELECT street_name, street_type, suburb, state, postcode, property_count
+FROM street_stats
+CROSS JOIN (SELECT CAST(@exact_street AS TEXT) AS exact_street) exact_params
+WHERE street_name LIKE @street_pattern
+  AND (CAST(@street_type AS TEXT) = '' OR street_type = UPPER(CAST(@street_type AS TEXT)))
+  AND (CAST(@suburb AS TEXT) = '' OR suburb = UPPER(CAST(@suburb AS TEXT)))
+  AND (CAST(@state AS TEXT) = '' OR state = UPPER(CAST(@state AS TEXT)))
+  AND (CAST(@postcode AS TEXT) = '' OR postcode = CAST(@postcode AS TEXT))
+ORDER BY
+  CASE WHEN street_name = UPPER(exact_params.exact_street) AND exact_params.exact_street <> '' THEN 0 ELSE 1 END,
+  property_count DESC,
+  street_name ASC,
+  suburb ASC,
+  postcode ASC
+LIMIT @row_limit OFFSET @row_offset;
+
+-- name: CountStreetStatsGroups :one
+SELECT COUNT(*)
+FROM street_stats
+WHERE street_name LIKE @street_pattern
+  AND (CAST(@street_type AS TEXT) = '' OR street_type = UPPER(CAST(@street_type AS TEXT)))
+  AND (CAST(@suburb AS TEXT) = '' OR suburb = UPPER(CAST(@suburb AS TEXT)))
+  AND (CAST(@state AS TEXT) = '' OR state = UPPER(CAST(@state AS TEXT)))
+  AND (CAST(@postcode AS TEXT) = '' OR postcode = CAST(@postcode AS TEXT));
 
 -- name: CountStreetGroups :one
 SELECT COUNT(*) AS group_count FROM (
@@ -730,10 +715,10 @@ FROM med;
 -- name: SuggestSuburbs :many
 SELECT suburb, state, property_count, sales_count
 FROM suburb_stats
+CROSS JOIN (SELECT CAST(@exact_suburb AS TEXT) AS exact_suburb) exact_params
 WHERE suburb LIKE @suburb_pattern
-  AND (CAST(@exact_suburb AS TEXT) = '' OR TRUE)
 ORDER BY
-  CASE WHEN suburb = UPPER(CAST(@exact_suburb AS TEXT)) THEN 0 ELSE 1 END,
+  CASE WHEN suburb = UPPER(exact_params.exact_suburb) THEN 0 ELSE 1 END,
   sales_count DESC,
   suburb ASC,
   state ASC
@@ -778,10 +763,10 @@ LIMIT 1;
 -- name: SuggestStreetStats :many
 SELECT street_name, street_type, suburb, state, postcode, property_count
 FROM street_stats
+CROSS JOIN (SELECT CAST(@exact_street AS TEXT) AS exact_street) exact_params
 WHERE street_name LIKE @street_pattern
-  AND (CAST(@exact_street AS TEXT) = '' OR TRUE)
 ORDER BY
-  CASE WHEN street_name = UPPER(CAST(@exact_street AS TEXT)) THEN 0 ELSE 1 END,
+  CASE WHEN street_name = UPPER(exact_params.exact_street) THEN 0 ELSE 1 END,
   property_count DESC,
   street_name ASC,
   suburb ASC,
@@ -791,9 +776,9 @@ LIMIT @row_limit;
 -- name: SuggestPostcodeStats :many
 SELECT postcode, property_count, sample_suburb
 FROM postcode_stats
+CROSS JOIN (SELECT CAST(@exact_postcode AS TEXT) AS exact_postcode) exact_params
 WHERE postcode LIKE @postcode_pattern
-  AND (CAST(@exact_postcode AS TEXT) = '' OR TRUE)
 ORDER BY
-  CASE WHEN postcode = CAST(@exact_postcode AS TEXT) THEN 0 ELSE 1 END,
+  CASE WHEN postcode = CAST(exact_params.exact_postcode AS TEXT) THEN 0 ELSE 1 END,
   postcode ASC
 LIMIT @row_limit;

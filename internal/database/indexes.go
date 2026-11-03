@@ -20,6 +20,7 @@ var requiredSearchIndexes = []string{
 	"idx_gnaf_state",
 	"idx_gnaf_street",
 	"idx_gnaf_postcode",
+	"idx_gnaf_base_pid",
 	"idx_gnaf_street_group",
 	"idx_gnaf_postcode_street",
 	"idx_sales_lookup",
