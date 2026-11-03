@@ -29,6 +29,7 @@ var requiredSearchIndexes = []string{
 	"idx_canonical_sales_suburb",
 	"idx_canonical_sales_postcode",
 	"idx_canonical_sales_property",
+	"idx_canonical_sales_recent",
 	"idx_import_runs_finished",
 	"idx_street_stats_count",
 	"idx_street_stats_location",

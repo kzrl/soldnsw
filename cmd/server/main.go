@@ -855,6 +855,18 @@ func (app *App) searchPageData(ctx context.Context) PageData {
 	return data
 }
 
+// searchResultPageData is the result-page shell for templates that do not
+// render the homepage statistics bar or recent-sales list (for example
+// postcode.html). It avoids the global aggregate queries that homePageData
+// issues on every request.
+func (app *App) searchResultPageData() PageData {
+	return PageData{
+		Title:       "Search Results - SoldNSW",
+		ActiveNav:   "search",
+		HasSearched: true,
+	}
+}
+
 const maxSearchQueryLength = 120
 const suggestionCacheTTL = time.Minute
 
@@ -1464,7 +1476,7 @@ func (app *App) renderPostcodePage(w http.ResponseWriter, r *http.Request, postc
 	sortValue := resultSort(strings.ToLower(strings.TrimSpace(query.Get("sort"))), "street", false)
 	onlyWithSales := onlyWithSalesParam(query.Get("only_with_sales"))
 
-	data := app.searchPageData(ctx)
+	data := app.searchResultPageData()
 	data.Title = "Postcode " + postcode + " - SoldNSW"
 	data.SearchMode = "postcode"
 	data.QueryPostcode = postcode
@@ -2583,7 +2595,7 @@ func (app *App) readFlash(w http.ResponseWriter, r *http.Request) *FlashMessage 
 // renderPostcodeError renders a postcode page with a service-unavailable
 // notice while keeping the requested postcode in the title/context.
 func (app *App) renderPostcodeError(w http.ResponseWriter, r *http.Request, postcode, title, message string) {
-	data := app.searchPageData(r.Context())
+	data := app.searchResultPageData()
 	data.Title = title
 	data.SearchMode = "postcode"
 	data.QueryPostcode = postcode

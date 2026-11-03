@@ -14,6 +14,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_canonical_sales_dedupe ON canonical_sales(
 CREATE INDEX IF NOT EXISTS idx_canonical_sales_suburb ON canonical_sales(suburb, state, settlement_date DESC);
 CREATE INDEX IF NOT EXISTS idx_canonical_sales_postcode ON canonical_sales(postcode, settlement_date DESC);
 CREATE INDEX IF NOT EXISTS idx_canonical_sales_property ON canonical_sales(canonical_pid, settlement_date DESC);
+CREATE INDEX IF NOT EXISTS idx_canonical_sales_recent ON canonical_sales(settlement_date DESC, sale_id DESC);
 CREATE INDEX IF NOT EXISTS idx_import_runs_finished ON import_runs(status, finished_at DESC);
 CREATE INDEX IF NOT EXISTS idx_street_stats_count ON street_stats(property_count DESC);
 CREATE INDEX IF NOT EXISTS idx_street_stats_location ON street_stats(suburb, state, postcode);

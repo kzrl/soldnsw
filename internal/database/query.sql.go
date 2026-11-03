@@ -1496,28 +1496,28 @@ func (q *Queries) InsertPropertySale(ctx context.Context, arg InsertPropertySale
 }
 
 const listPostcodeProperties = `-- name: ListPostcodeProperties :many
-WITH latest AS (
-    SELECT canonical_pid, settlement_date AS latest_sale_date, sale_price AS latest_sale_price,
-           ROW_NUMBER() OVER (
-               PARTITION BY canonical_pid
-               ORDER BY settlement_date DESC, sale_id DESC
-           ) AS rn
-    FROM canonical_sales
-)
 SELECT p.gnaf_pid, p.street_number, p.street_name, p.street_type, p.suburb, p.state, p.postcode, p.latitude, p.longitude, p.lot_number, p.plan_number, p.property_type, p.land_area, p.base_pid, p.dwelling_type FROM gnaf_properties p
 LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
-LEFT JOIN latest l ON l.canonical_pid = p.gnaf_pid AND l.rn = 1
 CROSS JOIN (SELECT CAST(?1 AS TEXT) AS sort_key) sort_params
 WHERE (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
   AND p.postcode = ?2
   AND (CAST(?3 AS TEXT) = ''
        OR p.dwelling_type = CAST(?3 AS TEXT)
        OR (CAST(?3 AS TEXT) = 'other' AND p.dwelling_type = 'unknown'))
-  AND (CAST(?4 AS INTEGER) = 0 OR l.canonical_pid IS NOT NULL)
+  AND (CAST(?4 AS INTEGER) = 0
+       OR EXISTS (SELECT 1 FROM canonical_sales cs WHERE cs.canonical_pid = p.gnaf_pid))
   AND (CAST(?1 AS TEXT) = '' OR TRUE)
 ORDER BY
-  CASE WHEN sort_params.sort_key = 'latest' THEN l.latest_sale_date END DESC,
-  CASE WHEN sort_params.sort_key = 'price' THEN l.latest_sale_price END DESC,
+  CASE WHEN sort_params.sort_key = 'latest' THEN COALESCE((
+      SELECT cs.settlement_date FROM canonical_sales cs
+      WHERE cs.canonical_pid = p.gnaf_pid
+      ORDER BY cs.settlement_date DESC, cs.sale_id DESC LIMIT 1
+  ), '') END DESC,
+  CASE WHEN sort_params.sort_key = 'price' THEN COALESCE((
+      SELECT cs.sale_price FROM canonical_sales cs
+      WHERE cs.canonical_pid = p.gnaf_pid
+      ORDER BY cs.settlement_date DESC, cs.sale_id DESC LIMIT 1
+  ), 0) END DESC,
   p.suburb ASC,
   p.street_name ASC,
   CASE WHEN p.street_number IS NULL OR TRIM(p.street_number) = '' THEN 1 ELSE 0 END,
@@ -1651,17 +1651,8 @@ func (q *Queries) ListRecentSalesWithAddress(ctx context.Context) ([]ListRecentS
 }
 
 const listStreetProperties = `-- name: ListStreetProperties :many
-WITH latest AS (
-    SELECT canonical_pid, settlement_date AS latest_sale_date, sale_price AS latest_sale_price,
-           ROW_NUMBER() OVER (
-               PARTITION BY canonical_pid
-               ORDER BY settlement_date DESC, sale_id DESC
-           ) AS rn
-    FROM canonical_sales
-)
 SELECT p.gnaf_pid, p.street_number, p.street_name, p.street_type, p.suburb, p.state, p.postcode, p.latitude, p.longitude, p.lot_number, p.plan_number, p.property_type, p.land_area, p.base_pid, p.dwelling_type FROM gnaf_properties p
 LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
-LEFT JOIN latest l ON l.canonical_pid = p.gnaf_pid AND l.rn = 1
 CROSS JOIN (SELECT CAST(?1 AS TEXT) AS sort_key) sort_params
 WHERE (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
   AND p.street_name = UPPER(?2)
@@ -1672,11 +1663,20 @@ WHERE (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
   AND (CAST(?7 AS TEXT) = ''
        OR p.dwelling_type = CAST(?7 AS TEXT)
        OR (CAST(?7 AS TEXT) = 'other' AND p.dwelling_type = 'unknown'))
-  AND (CAST(?8 AS INTEGER) = 0 OR l.canonical_pid IS NOT NULL)
+  AND (CAST(?8 AS INTEGER) = 0
+       OR EXISTS (SELECT 1 FROM canonical_sales cs WHERE cs.canonical_pid = p.gnaf_pid))
   AND (CAST(?1 AS TEXT) = '' OR TRUE)
 ORDER BY
-  CASE WHEN sort_params.sort_key = 'latest' THEN l.latest_sale_date END DESC,
-  CASE WHEN sort_params.sort_key = 'price' THEN l.latest_sale_price END DESC,
+  CASE WHEN sort_params.sort_key = 'latest' THEN COALESCE((
+      SELECT cs.settlement_date FROM canonical_sales cs
+      WHERE cs.canonical_pid = p.gnaf_pid
+      ORDER BY cs.settlement_date DESC, cs.sale_id DESC LIMIT 1
+  ), '') END DESC,
+  CASE WHEN sort_params.sort_key = 'price' THEN COALESCE((
+      SELECT cs.sale_price FROM canonical_sales cs
+      WHERE cs.canonical_pid = p.gnaf_pid
+      ORDER BY cs.settlement_date DESC, cs.sale_id DESC LIMIT 1
+  ), 0) END DESC,
   CASE WHEN p.street_number IS NULL OR TRIM(p.street_number) = '' THEN 1 ELSE 0 END,
   CAST(REPLACE(p.street_number, ' ', '') AS INTEGER),
   p.street_number,
@@ -1843,17 +1843,8 @@ func (q *Queries) SearchPropertiesBySuburb(ctx context.Context, suburb string) (
 }
 
 const searchPropertiesFlexible = `-- name: SearchPropertiesFlexible :many
-WITH latest AS (
-    SELECT canonical_pid, settlement_date AS latest_sale_date, sale_price AS latest_sale_price,
-           ROW_NUMBER() OVER (
-               PARTITION BY canonical_pid
-               ORDER BY settlement_date DESC, sale_id DESC
-           ) AS rn
-    FROM canonical_sales
-)
 SELECT p.gnaf_pid, p.street_number, p.street_name, p.street_type, p.suburb, p.state, p.postcode, p.latitude, p.longitude, p.lot_number, p.plan_number, p.property_type, p.land_area, p.base_pid, p.dwelling_type FROM gnaf_properties p
 LEFT JOIN property_links pl ON pl.gnaf_pid = p.gnaf_pid
-LEFT JOIN latest l ON l.canonical_pid = p.gnaf_pid AND l.rn = 1
 CROSS JOIN (
     SELECT CAST(?1 AS TEXT) AS sort_key, CAST(?2 AS TEXT) AS number_exact_key
 ) sort_params
@@ -1871,7 +1862,8 @@ WHERE (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
       OR p.dwelling_type = ?8
       OR (?8 = 'other' AND p.dwelling_type = 'unknown')
   )
-  AND (CAST(?9 AS INTEGER) = 0 OR l.canonical_pid IS NOT NULL)
+  AND (CAST(?9 AS INTEGER) = 0
+       OR EXISTS (SELECT 1 FROM canonical_sales cs WHERE cs.canonical_pid = p.gnaf_pid))
   AND (CAST(?1 AS TEXT) = '' OR TRUE)
   AND (CAST(?2 AS TEXT) = '' OR TRUE)
 ORDER BY
@@ -1879,8 +1871,16 @@ ORDER BY
     WHEN sort_params.number_exact_key <> '' AND UPPER(REPLACE(p.street_number, ' ', '')) = sort_params.number_exact_key THEN 0
     ELSE 1
   END,
-  CASE WHEN sort_params.sort_key = 'latest' THEN l.latest_sale_date END DESC,
-  CASE WHEN sort_params.sort_key = 'price' THEN l.latest_sale_price END DESC,
+  CASE WHEN sort_params.sort_key = 'latest' THEN COALESCE((
+      SELECT cs.settlement_date FROM canonical_sales cs
+      WHERE cs.canonical_pid = p.gnaf_pid
+      ORDER BY cs.settlement_date DESC, cs.sale_id DESC LIMIT 1
+  ), '') END DESC,
+  CASE WHEN sort_params.sort_key = 'price' THEN COALESCE((
+      SELECT cs.sale_price FROM canonical_sales cs
+      WHERE cs.canonical_pid = p.gnaf_pid
+      ORDER BY cs.settlement_date DESC, cs.sale_id DESC LIMIT 1
+  ), 0) END DESC,
   p.street_name,
   p.street_number
 LIMIT 50
