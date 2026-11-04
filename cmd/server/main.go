@@ -1394,11 +1394,17 @@ func streetGroupsMatchName(groups []database.SearchStreetGroupsRow, streetName s
 }
 
 // renderStreetGroups displays one page of matching streets for a street query.
-func (app *App) renderStreetGroups(w http.ResponseWriter, r *http.Request, address string, groups []database.SearchStreetGroupsRow, total int64, page int, flash *FlashMessage) {
+func (app *App) renderStreetGroups(w http.ResponseWriter, r *http.Request, address string, parsed database.ParsedSearch, groups []database.SearchStreetGroupsRow, total int64, page int, flash *FlashMessage) {
 	data := app.searchPageData(r.Context())
 	data.Title = "Street Search Results - SoldNSW"
 	data.SearchMode = "street"
 	data.QueryAddress = address
+	data.QueryStreet = parsed.StreetName
+	data.QueryStreetType = parsed.StreetType
+	data.QuerySuburb = parsed.Suburb
+	data.QueryState = parsed.State
+	data.QueryPostcode = parsed.Postcode
+	data.QueryNumber = parsed.Number
 	data.StreetMatches = groups
 	data.Flash = flash
 	setSearchPagination(&data, page, total, suburbSalesPageSize)
@@ -1674,7 +1680,7 @@ func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if total > 0 && (page > 1 || streetGroupsMatchName(groups, parsed.StreetName)) {
-				app.renderStreetGroups(w, r, address, groups, total, page, flash)
+				app.renderStreetGroups(w, r, address, parsed, groups, total, page, flash)
 				return
 			}
 		}
@@ -1835,7 +1841,7 @@ func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			app.renderStreetGroups(w, r, "", groups, total, page, flash)
+			app.renderStreetGroups(w, r, "", parsed, groups, total, page, flash)
 			return
 		}
 	}

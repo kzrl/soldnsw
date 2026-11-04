@@ -120,6 +120,7 @@
     </div>
 </section>
 
+{{if not .HasSearched}}
 <!-- Stats Bar -->
 <div class="has-background-light py-4" style="border-bottom: 1px solid #e5e7eb;">
     <div class="container">
@@ -151,6 +152,7 @@
         </nav>
     </div>
 </div>
+{{end}}
 
 <!-- Search Results -->
 {{if .HasSearched}}
@@ -401,6 +403,7 @@
 </section>
 {{end}}
 
+{{if not .HasSearched}}
 <!-- Recent Sales -->
 <section class="section py-5" id="recent-sales">
     <div class="container">
@@ -470,6 +473,7 @@
         </div>
     </div>
 </section>
+{{end}}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
     const input = document.getElementById("addressSearch");

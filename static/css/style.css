@@ -207,3 +207,25 @@ main {
         min-width: 620px;
     }
 }
+
+/* Losses page: same mobile treatment as the other result views. */
+@media screen and (max-width: 768px) {
+    .losses-table {
+        min-width: 760px;
+    }
+
+    .loss-type-tabs ul {
+        flex-wrap: wrap;
+    }
+}
+
+/* Property and building tables are wide; scroll them on phones. */
+@media screen and (max-width: 768px) {
+    .property-sales-table {
+        min-width: 560px;
+    }
+
+    .building-units-table {
+        min-width: 760px;
+    }
+}

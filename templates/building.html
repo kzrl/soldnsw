@@ -7,7 +7,7 @@
             <ul>
                 <li><a href="/"><i class="fa-solid fa-house mr-1"></i> Home</a></li>
                 <li><a href="/suburbs?suburb={{.BuildingSuburb}}&state={{.BuildingState}}">Suburb trends</a></li>
-                <li class="is-active"><a href="#" aria-current="page">{{.BuildingAddress}}</a></li>
+                <li class="is-active"><a aria-current="page">{{.BuildingAddress}}</a></li>
             </ul>
         </nav>
 
@@ -46,7 +46,7 @@
             </header>
             <div class="card-content p-0">
                 <div class="table-container mb-0">
-                    <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                    <table class="table is-fullwidth is-striped is-hoverable building-units-table mb-0">
                         <thead>
                             <tr class="has-background-light">
                                 <th scope="col">Unit / address</th>
@@ -74,8 +74,8 @@
                                     /
                                     {{if .PlanNumber.Valid}}{{.PlanNumber.String}}{{else}}—{{end}}
                                 </td>
-                                <td>{{if .PropertyType.Valid}}{{.PropertyType.String}}{{else}}—{{end}}</td>
-                                <td>{{if .LandArea.Valid}}{{formatArea .LandArea.Float64}}{{else}}—{{end}}</td>
+                                <td class="nowrap">{{if .PropertyType.Valid}}{{.PropertyType.String}}{{else}}—{{end}}</td>
+                                <td class="nowrap">{{if .LandArea.Valid}}{{formatArea .LandArea.Float64}}{{else}}—{{end}}</td>
                                 <td>
                                     {{if .LatestSaleDate}}
                                     {{formatDate .LatestSaleDate}}<br>
@@ -84,8 +84,8 @@
                                     <span class="has-text-grey-light">—</span>
                                     {{end}}
                                 </td>
-                                <td>{{.SalesCount}}</td>
-                                <td class="has-text-right">
+                                <td class="nowrap">{{.SalesCount}}</td>
+                                <td class="has-text-right nowrap">
                                     <a href="/property/{{.GnafPid}}" class="button is-small is-primary is-light">View sales</a>
                                 </td>
                             </tr>

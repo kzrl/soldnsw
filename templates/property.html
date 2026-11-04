@@ -16,7 +16,7 @@
                 <li><a href="/"><i class="fa-solid fa-house mr-1"></i> Home</a></li>
                 <li><a href="/properties?suburb={{.Property.Suburb}}&state={{.Property.State}}">{{.Property.Suburb}}</a></li>
                 <li><a href="/suburbs?suburb={{.Property.Suburb}}&state={{.Property.State}}">Suburb trends</a></li>
-                <li class="is-active"><a href="#" aria-current="page">{{if and .Property.StreetNumber.Valid .Property.StreetNumber.String}}{{.Property.StreetNumber.String}} {{end}}{{.Property.StreetName}} {{.Property.StreetType}}</a></li>
+                <li class="is-active"><a aria-current="page">{{if and .Property.StreetNumber.Valid .Property.StreetNumber.String}}{{.Property.StreetNumber.String}} {{end}}{{.Property.StreetName}} {{.Property.StreetType}}</a></li>
             </ul>
         </nav>
 
@@ -93,9 +93,9 @@
 
                         <!-- Metadata Grid -->
                         <div class="columns is-multiline is-mobile">
-                            <div class="column is-6-mobile is-4-tablet">
+                            <div class="column is-12-mobile is-4-tablet">
                                 <p class="heading has-text-grey">Property ID</p>
-                                <p class="is-family-monospace is-size-7 has-text-weight-bold has-text-dark">{{.Property.GnafPid}}</p>
+                                <p class="is-family-monospace is-size-7 has-text-weight-bold has-text-dark break-words">{{.Property.GnafPid}}</p>
                             </div>
                             {{if .Property.PropertyType.Valid}}
                             <div class="column is-6-mobile is-4-tablet">
@@ -147,7 +147,7 @@
                     <div class="card-content p-0">
                         {{if .Sales}}
                         <div class="table-container mb-0">
-                            <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                            <table class="table is-fullwidth is-striped is-hoverable property-sales-table mb-0">
                                 <thead>
                                     <tr class="has-background-light">
                                         <th scope="col">Date</th>
@@ -159,12 +159,12 @@
                                 <tbody>
                                     {{range .SalesWithChange}}
                                     <tr>
-                                        <td>
+                                        <td class="nowrap">
                                             {{formatDate .SettlementDate}}
                                             {{if .IsLatest}}<span class="tag is-success is-light is-small ml-2">Latest</span>{{end}}
                                         </td>
-                                        <td><span class="has-text-weight-bold has-text-success">${{formatPrice .SalePrice}}</span></td>
-                                        <td>
+                                        <td class="nowrap"><span class="has-text-weight-bold has-text-success">${{formatPrice .SalePrice}}</span></td>
+                                        <td class="nowrap">
                                             {{if .HasChange}}
                                             <span class="{{if lt .ChangeAmount 0}}has-text-danger{{else}}has-text-success{{end}}">
                                                 {{formatSignedPrice .ChangeAmount}}
@@ -174,7 +174,7 @@
                                             <span class="has-text-grey-light">—</span>
                                             {{end}}
                                         </td>
-                                        <td>
+                                        <td class="nowrap">
                                             <span class="tag {{if eq .SourceType "Auction"}}is-warning is-light{{else if eq .SourceType "Public Registry"}}is-info is-light{{else}}is-light{{end}}">
                                                 {{if eq .SourceType "NSW Valuer General (PSI)"}}Valuer General{{else}}{{.SourceType}}{{end}}
                                             </span>
