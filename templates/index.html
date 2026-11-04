@@ -18,7 +18,7 @@
                     <div class="box has-background-white has-text-left p-5 shadow-lg">
                         <form action="/properties" method="GET" id="addressSearchForm" autocomplete="off">
                             <label class="label is-small has-text-grey-dark" for="addressSearch">Search by address, street or postcode</label>
-                            <div class="field has-addons mb-2">
+                            <div class="field is-grouped is-grouped-multiline address-search-field mb-2">
                                 <div class="control is-expanded has-icons-left">
                                     <input id="addressSearch" class="input is-medium is-primary" type="text" name="address" placeholder="e.g. 17 Arnold St Killara, Arnold St, or 2071" value="{{.QueryAddress}}" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="addressSuggestions">
                                     <span class="icon is-small is-left"><i class="fa-solid fa-location-dot"></i></span>
@@ -50,19 +50,19 @@
                             <summary class="is-size-7 has-text-grey">Advanced search by street, suburb, number or postcode</summary>
                             <form action="/properties" method="GET" class="mt-3">
                                 <div class="columns is-variable is-2 is-multiline">
-                                    <div class="column is-2">
+                                    <div class="column is-12-mobile is-2-tablet">
                                         <label class="label is-small has-text-grey-dark" for="searchNumber">Number</label>
                                         <input id="searchNumber" class="input" type="text" name="number" placeholder="17" value="{{.QueryNumber}}" autocomplete="off">
                                     </div>
-                                    <div class="column is-3">
+                                    <div class="column is-12-mobile is-3-tablet">
                                         <label class="label is-small has-text-grey-dark" for="searchStreet">Street</label>
                                         <input id="searchStreet" class="input" type="text" name="street" placeholder="ARNOLD" value="{{.QueryStreet}}" autocomplete="off">
                                     </div>
-                                    <div class="column is-3">
+                                    <div class="column is-12-mobile is-3-tablet">
                                         <label class="label is-small has-text-grey-dark" for="searchSuburb">Suburb</label>
                                         <input id="searchSuburb" class="input" type="text" name="suburb" placeholder="KILLARA" value="{{.QuerySuburb}}" autocomplete="off">
                                     </div>
-                                    <div class="column is-2">
+                                    <div class="column is-12-mobile is-2-tablet">
                                         <label class="label is-small has-text-grey-dark" for="searchState">State</label>
                                         <div class="select is-fullwidth">
                                             <select id="searchState" name="state">
@@ -78,11 +78,11 @@
                                             </select>
                                         </div>
                                     </div>
-                                    <div class="column is-2">
+                                    <div class="column is-12-mobile is-2-tablet">
                                         <label class="label is-small has-text-grey-dark" for="searchPostcode">Postcode</label>
                                         <input id="searchPostcode" class="input" type="text" name="postcode" placeholder="2071" value="{{.QueryPostcode}}" inputmode="numeric" maxlength="4">
                                     </div>
-                                    <div class="column is-2">
+                                    <div class="column is-12-mobile is-2-tablet">
                                         <label class="label is-small has-text-grey-dark" for="searchDwelling">Dwelling</label>
                                         <div class="select is-fullwidth">
                                             <select id="searchDwelling" name="dwelling">
@@ -94,7 +94,7 @@
                                             </select>
                                         </div>
                                     </div>
-                                    <div class="column is-2">
+                                    <div class="column is-12-mobile is-2-tablet">
                                         <label class="label is-small">&nbsp;</label>
                                         <button type="submit" class="button is-primary is-fullwidth">Search</button>
                                     </div>
@@ -179,7 +179,7 @@
 
         {{if .StreetMatches}}
         <div class="table-container">
-            <table class="table is-fullwidth is-hoverable is-striped">
+            <table class="table is-fullwidth is-hoverable is-striped street-groups-table">
                 <thead>
                     <tr class="has-background-light">
                         <th scope="col">Street</th>
@@ -195,8 +195,8 @@
                             <a href="{{streetURL .}}" class="has-text-weight-bold">{{.StreetName}} {{.StreetType}}</a>
                         </td>
                         <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-link">{{.Suburb}}</a></td>
-                        <td><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
-                        <td class="has-text-right">
+                        <td class="nowrap"><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
+                        <td class="has-text-right nowrap">
                             <a href="{{streetURL .}}" class="button is-small is-primary is-light">
                                 <span>{{.PropertyCount}} propert{{if eq .PropertyCount 1}}y{{else}}ies{{end}}</span>
                                 <span class="icon is-small"><i class="fa-solid fa-arrow-right"></i></span>
@@ -230,14 +230,16 @@
                 </div>
             </div>
             <div class="level-right">
-                <a href="/properties?address={{urlquery .QueryStreet}}+{{urlquery .QueryStreetType}}+{{urlquery .QuerySuburb}}" class="button is-small is-light">
-                    <span class="icon is-small"><i class="fa-solid fa-arrow-left"></i></span>
-                    <span>Back to streets</span>
-                </a>
-                <a href="/suburbs?suburb={{urlquery .QuerySuburb}}&state={{urlquery .QueryState}}" class="button is-small is-info is-outlined ml-2">
-                    <span class="icon"><i class="fa-solid fa-chart-line"></i></span>
-                    <span>Suburb trends</span>
-                </a>
+                <div class="buttons mb-0">
+                    <a href="/properties?address={{urlquery .QueryStreet}}+{{urlquery .QueryStreetType}}+{{urlquery .QuerySuburb}}" class="button is-small is-light">
+                        <span class="icon is-small"><i class="fa-solid fa-arrow-left"></i></span>
+                        <span>Back to streets</span>
+                    </a>
+                    <a href="/suburbs?suburb={{urlquery .QuerySuburb}}&state={{urlquery .QueryState}}" class="button is-small is-info is-outlined">
+                        <span class="icon"><i class="fa-solid fa-chart-line"></i></span>
+                        <span>Suburb trends</span>
+                    </a>
+                </div>
             </div>
         </div>
 
@@ -245,27 +247,27 @@
 
         {{if .StreetSummary}}
         <div class="columns is-multiline mb-5">
-            <div class="column is-6-mobile is-3-tablet">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
                 <div class="card p-4 has-background-primary-light has-text-centered shadow-sm" style="border-radius: 8px;">
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-house mr-1"></i> Properties</p>
                     <p class="title is-4 has-text-primary mb-0">{{.StreetSummary.PropertyCount}}</p>
                 </div>
             </div>
-            <div class="column is-6-mobile is-3-tablet">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
                 <div class="card p-4 has-background-info-light has-text-centered shadow-sm" style="border-radius: 8px;">
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-receipt mr-1"></i> Recorded sales</p>
                     <p class="title is-4 has-text-info mb-0">{{.StreetSummary.SalesCount}}</p>
                     <p class="is-size-7 has-text-grey mt-1">{{if .StreetSummary.LatestSaleDate}}Latest {{formatDate .StreetSummary.LatestSaleDate}}{{else}}No sales recorded{{end}}</p>
                 </div>
             </div>
-            <div class="column is-6-mobile is-3-tablet">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
                 <div class="card p-4 has-background-success-light has-text-centered shadow-sm" style="border-radius: 8px;">
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-calculator mr-1"></i> Median sale price</p>
                     <p class="title is-4 has-text-success mb-0">{{if gt .StreetSummary.SalesCount 0}}${{formatPrice .StreetSummary.MedianPrice}}{{else}}—{{end}}</p>
                     <p class="is-size-7 has-text-grey mt-1">Average: {{if gt .StreetSummary.SalesCount 0}}${{formatPrice .StreetSummary.AvgPrice}}{{else}}—{{end}}</p>
                 </div>
             </div>
-            <div class="column is-6-mobile is-3-tablet">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
                 <div class="card p-4 has-background-warning-light has-text-centered shadow-sm" style="border-radius: 8px;">
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-up mr-1"></i> Highest sale</p>
                     <p class="title is-4 has-text-dark mb-0">{{if gt .StreetSummary.SalesCount 0}}${{formatPrice .StreetSummary.MaxPrice}}{{else}}—{{end}}</p>
@@ -278,7 +280,7 @@
 
         {{if .Properties}}
         <div class="table-container">
-            <table class="table is-fullwidth is-hoverable is-striped">
+            <table class="table is-fullwidth is-hoverable is-striped street-properties-table">
                 <thead>
                     <tr class="has-background-light">
                         <th scope="col">Address</th>
@@ -301,8 +303,8 @@
                         </td>
                         <td><span class="tag is-light is-small">{{dwellingLabel .DwellingType}}</span></td>
                         <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-link">{{.Suburb}}</a></td>
-                        <td><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
-                        <td class="has-text-right">
+                        <td class="nowrap"><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
+                        <td class="has-text-right nowrap">
                             <a href="/property/{{.GnafPid}}" class="button is-small is-primary is-light">
                                 <span>View sales</span>
                                 <span class="icon is-small"><i class="fa-solid fa-arrow-right"></i></span>
@@ -350,7 +352,7 @@
 
         {{if .Properties}}
         <div class="table-container">
-            <table class="table is-fullwidth is-hoverable is-striped">
+            <table class="table is-fullwidth is-hoverable is-striped address-results-table">
                 <thead>
                     <tr class="has-background-light">
                         <th scope="col">Address</th>
@@ -373,8 +375,8 @@
                         </td>
                         <td><span class="tag is-light is-small">{{dwellingLabel .DwellingType}}</span></td>
                         <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-link">{{.Suburb}}</a></td>
-                        <td><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
-                        <td class="has-text-right">
+                        <td class="nowrap"><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
+                        <td class="has-text-right nowrap">
                             <a href="/property/{{.GnafPid}}" class="button is-small is-primary is-light">
                                 <span>View sales</span>
                                 <span class="icon is-small"><i class="fa-solid fa-arrow-right"></i></span>
@@ -420,7 +422,7 @@
         </div>
 
         <div class="table-container">
-            <table class="table is-fullwidth is-hoverable is-striped">
+            <table class="table is-fullwidth is-hoverable is-striped recent-sales-table">
                 <thead>
                     <tr class="has-background-light">
                         <th scope="col">Date</th>
@@ -434,7 +436,7 @@
                 <tbody>
                     {{range .RecentSales}}
                     <tr>
-                        <td>{{formatDate .SettlementDate}}</td>
+                        <td class="nowrap">{{formatDate .SettlementDate}}</td>
                         <td>
                             <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
                                 {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
@@ -444,15 +446,15 @@
                             <a href="/properties?suburb={{.Suburb}}&state={{.State}}" class="has-text-link">{{.Suburb}}</a>,
                             <span class="tag is-small is-dark is-light">{{.State}}</span> {{.Postcode}}
                         </td>
-                        <td>
+                        <td class="nowrap">
                             <span class="has-text-weight-bold has-text-success is-size-6">${{formatPrice .SalePrice}}</span>
                         </td>
-                        <td>
+                        <td class="nowrap">
                             <span class="tag is-small {{if eq .SourceType "Auction"}}is-warning is-light{{else if eq .SourceType "Public Registry"}}is-info is-light{{else}}is-light{{end}}">
                                 {{if eq .SourceType "NSW Valuer General (PSI)"}}Valuer General{{else}}{{.SourceType}}{{end}}
                             </span>
                         </td>
-                        <td class="has-text-right">
+                        <td class="has-text-right nowrap">
                             <a href="/property/{{.GnafPid}}" class="button is-small is-link is-light">View sales</a>
                         </td>
                     </tr>

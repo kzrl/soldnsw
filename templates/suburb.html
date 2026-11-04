@@ -24,7 +24,7 @@
             </div>
             <div class="column is-5">
                 <form action="/suburbs" method="GET">
-                    <div class="field has-addons mb-1">
+                    <div class="field is-grouped is-grouped-multiline suburb-search mb-1">
                         <div class="control is-expanded has-icons-left">
                             <input class="input" type="text" name="suburb" placeholder="Suburb, e.g. SURRY HILLS" value="{{.SelectedSuburb}}" autocomplete="off" required aria-label="Suburb">
                             <span class="icon is-small is-left">
@@ -32,7 +32,7 @@
                             </span>
                         </div>
                         <div class="control">
-                            <div class="select">
+                            <div class="select is-fullwidth">
                                 <select name="state" aria-label="State">
                                     <option value="" {{if eq .SelectedState ""}}selected{{end}}>Auto state</option>
                                     <option value="NSW" {{if eq .SelectedState "NSW"}}selected{{end}}>NSW</option>
@@ -47,7 +47,7 @@
                             </div>
                         </div>
                         <div class="control">
-                            <button type="submit" class="button is-primary">Show trends</button>
+                            <button type="submit" class="button is-primary is-fullwidth">Show trends</button>
                         </div>
                     </div>
                     <p class="help has-text-grey">Choose a state when the suburb name exists in more than one state.</p>
@@ -68,7 +68,7 @@
         {{end}}
 
         {{if .Analytics}}
-            <div class="level is-mobile mb-3">
+            <div class="level mb-3">
                 <div class="level-left">
                     <div>
                         <p class="heading has-text-grey mb-0">Price statistics range</p>
@@ -87,7 +87,7 @@
 
             <!-- KPI Stat Cards -->
             <div class="columns is-multiline mb-5">
-                <div class="column is-6-mobile is-3-tablet">
+                <div class="column is-12-mobile is-6-tablet is-3-desktop">
                     <div class="card p-4 has-background-primary-light has-text-centered shadow-sm" style="border-radius: 8px;">
                         <p class="heading has-text-grey-dark"><i class="fa-solid fa-calculator mr-1"></i> Median sale price</p>
                         <p class="title is-3 has-text-primary mb-0">${{formatPrice .Analytics.MedianPrice}}</p>
@@ -96,7 +96,7 @@
                         {{if .PriceNote}}<p class="is-size-7 has-text-warning-dark mt-1">{{.PriceNote}}</p>{{end}}
                     </div>
                 </div>
-                <div class="column is-6-mobile is-3-tablet">
+                <div class="column is-12-mobile is-6-tablet is-3-desktop">
                     <div class="card p-4 has-background-success-light has-text-centered shadow-sm" style="border-radius: 8px;">
                         <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-up mr-1"></i> Highest recorded sale</p>
                         <p class="title is-3 has-text-success mb-0">${{formatPrice .Analytics.MaxPrice}}</p>
@@ -109,7 +109,7 @@
                         {{end}}
                     </div>
                 </div>
-                <div class="column is-6-mobile is-3-tablet">
+                <div class="column is-12-mobile is-6-tablet is-3-desktop">
                     <div class="card p-4 has-background-info-light has-text-centered shadow-sm" style="border-radius: 8px;">
                         <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-down mr-1"></i> Lowest recorded sale</p>
                         <p class="title is-3 has-text-info mb-0">${{formatPrice .Analytics.MinPrice}}</p>
@@ -122,7 +122,7 @@
                         {{end}}
                     </div>
                 </div>
-                <div class="column is-6-mobile is-3-tablet">
+                <div class="column is-12-mobile is-6-tablet is-3-desktop">
                     <div class="card p-4 has-background-warning-light has-text-centered shadow-sm" style="border-radius: 8px;">
                         <p class="heading has-text-grey-dark"><i class="fa-solid fa-receipt mr-1"></i> Sales recorded</p>
                         <p class="title is-3 has-text-dark mb-0">{{.Analytics.TotalSales}}</p>
@@ -137,8 +137,8 @@
             </p>
 
             {{if .LossSummary}}
-            <div class="notification is-danger is-light mb-5">
-                <div class="level is-mobile mb-0">
+            <div class="notification is-danger is-light mb-5 break-words">
+                <div class="level mb-0">
                     <div class="level-left">
                         <div>
                             <p class="has-text-weight-bold">
@@ -174,7 +174,9 @@
                                 <a href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range=all" class="button {{if eq .ChartRange "all"}}is-primary{{else}}is-light{{end}}">All</a>
                             </div>
                             {{if .ChartLabels}}
-                            <canvas id="suburbChart" style="max-height: 280px;"></canvas>
+                            <div class="chart-container">
+                                <canvas id="suburbChart"></canvas>
+                            </div>
                             {{else}}
                             <p class="has-text-grey has-text-centered py-5">No sales recorded in this period.</p>
                             {{end}}
@@ -190,6 +192,7 @@
                             </p>
                         </header>
                         <div class="card-content">
+                            <div class="table-container">
                             <table class="table is-fullwidth is-narrow mb-4">
                                 <tbody>
                                     <tr><td><strong>Suburb</strong></td><td class="has-text-right">{{.SelectedSuburb}}</td></tr>
@@ -200,6 +203,7 @@
                                     <tr><td><strong>Sales recorded</strong></td><td class="has-text-right has-text-weight-bold">{{.Analytics.TotalSales}}</td></tr>
                                 </tbody>
                             </table>
+                            </div>
 
                             <div class="buttons">
                                 <a href="/properties?suburb={{.SelectedSuburb}}&state={{.SelectedState}}" class="button is-primary is-fullwidth">
@@ -226,7 +230,7 @@
                 <div class="card-content p-0">
                     {{if .SuburbSales}}
                     <div class="table-container mb-0">
-                        <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                        <table class="table is-fullwidth is-striped is-hoverable suburb-sales-table mb-0">
                             <thead>
                                 <tr class="has-background-light">
                                     <th scope="col">Date</th>
@@ -239,15 +243,15 @@
                             <tbody>
                                 {{range .SuburbSales}}
                                 <tr>
-                                    <td>{{formatDate .SettlementDate}}</td>
+                                    <td class="nowrap">{{formatDate .SettlementDate}}</td>
                                     <td>
                                         <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
                                             {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
                                         </a>
                                     </td>
-                                    <td class="has-text-weight-bold has-text-success">${{formatPrice .SalePrice}}</td>
-                                    <td><span class="tag is-small is-light">{{if eq .SourceType "NSW Valuer General (PSI)"}}Valuer General{{else}}{{.SourceType}}{{end}}</span></td>
-                                    <td class="has-text-right">
+                                    <td class="has-text-weight-bold has-text-success nowrap">${{formatPrice .SalePrice}}</td>
+                                    <td class="nowrap"><span class="tag is-small is-light">{{if eq .SourceType "NSW Valuer General (PSI)"}}Valuer General{{else}}{{.SourceType}}{{end}}</span></td>
+                                    <td class="has-text-right nowrap">
                                         <a href="/property/{{.GnafPid}}" class="button is-small is-light is-primary">View sales</a>
                                     </td>
                                 </tr>
@@ -260,7 +264,7 @@
                     {{end}}
                 </div>
                 {{if .SuburbSalesTotal}}
-                <footer class="card-footer">
+                <footer class="card-footer is-flex-wrap-wrap">
                     <div class="card-footer-item is-size-7 has-text-grey">
                         Showing {{.ShowingFrom}}–{{.ShowingTo}} of {{.SuburbSalesTotal}} sales
                     </div>
@@ -306,7 +310,7 @@
                     {{end}}
                     {{if .OverviewStats}}
                     <div class="table-container mb-0">
-                        <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                        <table class="table is-fullwidth is-striped is-hoverable suburb-overview-table mb-0">
                             <thead>
                                 <tr class="has-background-light">
                                     <th scope="col">Suburb</th>

@@ -1,5 +1,13 @@
 /* SoldNSW Custom Styling */
 
+/* Bulma expects border-box sizing. Set it explicitly so form controls and
+   column grids include their padding in percentage widths. */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
 :root {
     --primary-color: #00d1b2;
     --primary-dark: #00a78e;
@@ -93,4 +101,109 @@ main {
 
 .address-suggestion .icon {
     color: #00a78e;
+}
+
+/* Responsive chart wrapper keeps Chart.js inside its card on small screens. */
+.chart-container {
+    position: relative;
+    width: 100%;
+    height: 280px;
+}
+
+/* Long notification text must not widen the mobile viewport. */
+.break-words {
+    overflow-wrap: anywhere;
+}
+
+@media screen and (max-width: 768px) {
+    .chart-container {
+        height: 220px;
+    }
+}
+
+/* Suburb search: give the text field its own row on mobile, then split the
+   state selector and submit button across the next row. */
+@media screen and (max-width: 768px) {
+    .suburb-search > .control.is-expanded {
+        flex-basis: 100%;
+    }
+
+    .suburb-search > .control:not(.is-expanded) {
+        flex: 1 1 0;
+    }
+
+    .suburb-search .select,
+    .suburb-search .button {
+        width: 100%;
+    }
+}
+
+.nowrap {
+    white-space: nowrap;
+}
+
+/* Wide result tables scroll horizontally on phones instead of squeezing
+   every column into a few characters. */
+@media screen and (max-width: 768px) {
+    .suburb-sales-table {
+        min-width: 640px;
+    }
+
+    .suburb-overview-table {
+        min-width: 720px;
+    }
+}
+
+/* Postcode tables are wide; scroll them on phones instead of crushing columns. */
+@media screen and (max-width: 768px) {
+    .postcode-suburbs-table {
+        min-width: 680px;
+    }
+
+    .postcode-properties-table {
+        min-width: 620px;
+    }
+}
+
+/* Search-by-address: put the input and submit button on separate rows on
+   phones, and let the advanced search grid start at tablet. */
+@media screen and (max-width: 768px) {
+    .address-search-field > .control {
+        flex-basis: 100%;
+    }
+
+    .address-search-field .button {
+        width: 100%;
+    }
+
+    .result-filters .field.is-grouped > .control {
+        flex-basis: 100%;
+    }
+
+    .result-filters .select,
+    .result-filters .button {
+        width: 100%;
+    }
+
+    .result-filters label.checkbox {
+        margin-top: 0;
+    }
+
+    .street-groups-table {
+        min-width: 620px;
+    }
+
+    .street-properties-table {
+        min-width: 620px;
+    }
+
+    .recent-sales-table {
+        min-width: 720px;
+    }
+}
+
+@media screen and (max-width: 768px) {
+    .address-results-table {
+        min-width: 620px;
+    }
 }

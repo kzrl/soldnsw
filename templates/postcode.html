@@ -32,7 +32,7 @@
 
         {{if and .PostcodeSummary (gt .PostcodeSummary.PropertyCount 0)}}
         <div class="columns is-multiline mb-5">
-            <div class="column is-6-mobile is-3-tablet">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
                 <div class="card p-4 has-background-primary-light has-text-centered shadow-sm" style="border-radius: 8px;">
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-calculator mr-1"></i> Median sale price</p>
                     <p class="title is-3 has-text-primary mb-0">
@@ -41,21 +41,21 @@
                     <p class="is-size-7 has-text-grey mt-1">Average: {{if gt .PostcodeSummary.SalesCount 0}}${{formatPrice .PostcodeSummary.AvgPrice}}{{else}}—{{end}}</p>
                 </div>
             </div>
-            <div class="column is-6-mobile is-3-tablet">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
                 <div class="card p-4 has-background-info-light has-text-centered shadow-sm" style="border-radius: 8px;">
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-receipt mr-1"></i> Sales recorded</p>
                     <p class="title is-3 has-text-info mb-0">{{.PostcodeSummary.SalesCount}}</p>
                     <p class="is-size-7 has-text-grey mt-1">{{if .PostcodeSummary.LatestSaleDate}}Latest {{formatDate .PostcodeSummary.LatestSaleDate}}{{else}}No sales recorded{{end}}</p>
                 </div>
             </div>
-            <div class="column is-6-mobile is-3-tablet">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
                 <div class="card p-4 has-background-success-light has-text-centered shadow-sm" style="border-radius: 8px;">
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-up mr-1"></i> Highest recorded sale</p>
                     <p class="title is-3 has-text-success mb-0">{{if gt .PostcodeSummary.SalesCount 0}}${{formatPrice .PostcodeSummary.MaxPrice}}{{else}}—{{end}}</p>
                     <p class="is-size-7 has-text-grey mt-1">Across the postcode</p>
                 </div>
             </div>
-            <div class="column is-6-mobile is-3-tablet">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
                 <div class="card p-4 has-background-warning-light has-text-centered shadow-sm" style="border-radius: 8px;">
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-building mr-1"></i> Address records</p>
                     <p class="title is-3 has-text-dark mb-0">{{.PostcodeSummary.PropertyCount}}</p>
@@ -73,7 +73,7 @@
             </header>
             <div class="card-content p-0">
                 <div class="table-container">
-                    <table class="table is-fullwidth is-striped is-hoverable mb-0">
+                    <table class="table is-fullwidth is-striped is-hoverable postcode-suburbs-table mb-0">
                         <thead>
                             <tr class="has-background-light">
                                 <th scope="col">Suburb</th>
@@ -88,13 +88,13 @@
                             {{range .PostcodeSuburbs}}
                             <tr>
                                 <td><strong>{{.Suburb}}</strong></td>
-                                <td><span class="tag is-dark is-light">{{.State}}</span></td>
+                                <td class="nowrap"><span class="tag is-dark is-light">{{.State}}</span></td>
                                 <td class="has-text-right">{{.PropertyCount}}</td>
                                 <td class="has-text-right">{{.SalesCount}}</td>
                                 <td class="has-text-right">
                                     {{if gt .SalesCount 0}}<span class="has-text-weight-bold has-text-primary">${{formatPrice .AvgPrice}}</span>{{else}}<span class="has-text-grey-light">—</span>{{end}}
                                 </td>
-                                <td class="has-text-right">
+                                <td class="has-text-right nowrap">
                                     <a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="button is-small is-info is-light">View trends</a>
                                 </td>
                             </tr>
@@ -122,7 +122,7 @@
 
         {{if .Properties}}
         <div class="table-container">
-            <table class="table is-fullwidth is-hoverable is-striped">
+            <table class="table is-fullwidth is-hoverable is-striped postcode-properties-table">
                 <thead>
                     <tr class="has-background-light">
                         <th scope="col">Address</th>
@@ -145,8 +145,8 @@
                         </td>
                         <td><span class="tag is-light is-small">{{dwellingLabel .DwellingType}}</span></td>
                         <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-link">{{.Suburb}}</a></td>
-                        <td><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
-                        <td class="has-text-right">
+                        <td class="nowrap"><span class="tag is-dark is-light">{{.State}}</span> {{.Postcode}}</td>
+                        <td class="has-text-right nowrap">
                             <a href="/property/{{.GnafPid}}" class="button is-small is-primary is-light">
                                 <span>View sales</span>
                                 <span class="icon is-small"><i class="fa-solid fa-arrow-right"></i></span>

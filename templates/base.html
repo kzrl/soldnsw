@@ -75,7 +75,7 @@
 
     {{define "resultFilters"}}
     {{if .FilterAction}}
-    <form action="{{.FilterAction}}" method="GET" class="box p-3 mb-4">
+    <form action="{{.FilterAction}}" method="GET" class="box p-3 mb-4 result-filters">
         {{range .FilterParams}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
         <div class="field is-grouped is-grouped-multiline mb-0">
             <div class="control">
