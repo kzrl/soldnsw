@@ -219,6 +219,63 @@ main {
     }
 }
 
+/* Comparable-sales summary: keep large dollar figures on one line and stop
+   the three mobile columns from squeezing them into a broken number. */
+.comparable-summary .comparable-figure {
+    white-space: nowrap;
+    overflow-wrap: normal;
+}
+
+@media screen and (max-width: 768px) {
+    .comparable-summary .column {
+        padding-left: 0.35rem;
+        padding-right: 0.35rem;
+    }
+
+    .comparable-summary .heading {
+        font-size: 0.65rem;
+        letter-spacing: 0.02em;
+    }
+
+    .comparable-summary .comparable-figure {
+        font-size: 0.95rem;
+    }
+
+    .comparable-sales-table {
+        min-width: 560px;
+    }
+}
+
+@media screen and (max-width: 380px) {
+    .comparable-summary .comparable-figure {
+        font-size: 0.8rem;
+    }
+}
+
+/* Growth leaderboard and comparison tables scroll on phones. */
+@media screen and (max-width: 768px) {
+    .growth-table {
+        min-width: 860px;
+    }
+
+    .compare-table {
+        min-width: 640px;
+    }
+
+    .compare-table th[scope="row"] {
+        white-space: nowrap;
+    }
+
+    .compare-form .field.is-grouped > .control {
+        flex-basis: 100%;
+    }
+
+    .compare-form .select,
+    .compare-form .button {
+        width: 100%;
+    }
+}
+
 /* Property and building tables are wide; scroll them on phones. */
 @media screen and (max-width: 768px) {
     .property-sales-table {

@@ -93,6 +93,9 @@
                         <p class="title is-3 has-text-primary mb-0">${{formatPrice .Analytics.MedianPrice}}</p>
                         <p class="is-size-7 has-text-grey mt-1">{{.PriceLabel}} &bull; {{.Analytics.TotalSales}} sales</p>
                         <p class="is-size-7 has-text-grey mt-1">Average: ${{formatPrice .Analytics.AvgPrice}}</p>
+                        {{if gt .Analytics.MedianPricePerSqm 0}}
+                        <p class="is-size-7 has-text-grey mt-1">Land value: ${{formatPrice .Analytics.MedianPricePerSqm}}/m² ({{.Analytics.SqmSampleCount}} house sales)</p>
+                        {{end}}
                         {{if .PriceNote}}<p class="is-size-7 has-text-warning-dark mt-1">{{.PriceNote}}</p>{{end}}
                     </div>
                 </div>
@@ -198,6 +201,8 @@
                                     <tr><td><strong>Suburb</strong></td><td class="has-text-right">{{.SelectedSuburb}}</td></tr>
                                     <tr><td><strong>State</strong></td><td class="has-text-right"><span class="tag is-dark is-light">{{.SelectedState}}</span></td></tr>
                                     <tr><td><strong>Average sale</strong></td><td class="has-text-right has-text-weight-bold has-text-primary">${{formatPrice .Analytics.AvgPrice}}</td></tr>
+                                    <tr><td><strong>Median land value</strong></td><td class="has-text-right has-text-success">{{if gt .Analytics.MedianPricePerSqm 0}}${{formatPrice .Analytics.MedianPricePerSqm}}/m²{{else}}—{{end}}</td></tr>
+                                    <tr><td><strong>Land sales sampled</strong></td><td class="has-text-right">{{.Analytics.SqmSampleCount}}</td></tr>
                                     <tr><td><strong>Highest sale</strong></td><td class="has-text-right has-text-success">${{formatPrice .Analytics.MaxPrice}}</td></tr>
                                     <tr><td><strong>Lowest sale</strong></td><td class="has-text-right has-text-info">${{formatPrice .Analytics.MinPrice}}</td></tr>
                                     <tr><td><strong>Sales recorded</strong></td><td class="has-text-right has-text-weight-bold">{{.Analytics.TotalSales}}</td></tr>
@@ -210,6 +215,10 @@
                                     <span class="icon"><i class="fa-solid fa-list"></i></span>
                                     <span>View properties in {{.SelectedSuburb}}</span>
                                 </a>
+                                <a href="/compare?suburbs={{urlquery .SelectedSuburb}}%7C{{urlquery .SelectedState}}" class="button is-info is-light is-fullwidth">
+                                    <span class="icon"><i class="fa-solid fa-scale-balanced"></i></span>
+                                    <span>Compare {{.SelectedSuburb}}</span>
+                                </a>
                                 <a href="/submit" class="button is-light is-fullwidth">
                                     <span class="icon"><i class="fa-solid fa-plus"></i></span>
                                     <span>Add a sale</span>
@@ -221,7 +230,7 @@
             </div>
 
             <!-- Suburb Sales Records -->
-            <div class="card shadow-sm">
+            <div class="card shadow-sm" id="recorded-sales">
                 <header class="card-header has-background-white-ter">
                     <p class="card-header-title">
                         <i class="fa-solid fa-list-check mr-2 has-text-primary"></i> Recorded sales in {{.SelectedSuburb}}
@@ -271,14 +280,14 @@
                     <div class="card-footer-item">
                         <div class="buttons has-addons mb-0">
                             {{if .HasPrev}}
-                            <a class="button is-small is-light" href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.ChartRange}}&page={{.PrevPage}}">
+                            <a class="button is-small is-light" href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.ChartRange}}&page={{.PrevPage}}#recorded-sales">
                                 <span class="icon is-small"><i class="fa-solid fa-chevron-left"></i></span><span>Previous</span>
                             </a>
                             {{else}}
                             <button class="button is-small is-light" disabled>Previous</button>
                             {{end}}
                             {{if .HasNext}}
-                            <a class="button is-small is-light" href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.ChartRange}}&page={{.NextPage}}">
+                            <a class="button is-small is-light" href="/suburbs?suburb={{.SelectedSuburb}}&state={{.SelectedState}}&range={{.ChartRange}}&page={{.NextPage}}#recorded-sales">
                                 <span>Next</span><span class="icon is-small"><i class="fa-solid fa-chevron-right"></i></span>
                             </a>
                             {{else}}
@@ -298,6 +307,18 @@
 
         {{else}}
             <!-- Suburb Overview -->
+            <div class="notification is-danger is-light is-flex is-justify-content-space-between is-align-items-center is-flex-wrap-wrap">
+                <div class="mb-2">
+                    <p class="has-text-weight-bold mb-1"><i class="fa-solid fa-arrow-trend-down mr-1"></i> Market movers</p>
+                    <p class="is-size-7 has-text-grey">See the fastest-growing suburbs and those with the most loss-making resales.</p>
+                </div>
+                <div class="buttons mb-0">
+                    <a href="/suburbs/growth" class="button is-small is-success is-outlined">Fastest growing</a>
+                    <a href="/suburbs/most-losses" class="button is-small is-danger is-outlined">Most losses</a>
+                    <a href="/compare" class="button is-small is-light">Compare suburbs</a>
+                </div>
+            </div>
+
             <div class="card shadow-sm">
                 <header class="card-header has-background-white-ter">
                     <p class="card-header-title">
@@ -305,8 +326,8 @@
                     </p>
                 </header>
                 <div class="card-content p-0">
-                    {{if gt .OverviewTotal (len .OverviewStats)}}
-                    <p class="is-size-7 has-text-grey p-4 pb-0">Showing the top {{len .OverviewStats}} of {{.OverviewTotal}} suburbs. Choose a suburb above for full trends. Price changes compare the latest 12-month average with the 12 months ending 1, 5 or 10 years ago.</p>
+                    {{if gt .OverviewTotal 0}}
+                    <p class="is-size-7 has-text-grey p-4 pb-0">Page {{.OverviewPage}} of {{.OverviewTotalPages}} &bull; {{.OverviewTotal}} suburbs. Choose a suburb above for full trends. Price changes compare the latest 12-month average with the 12 months ending 1, 5 or 10 years ago.</p>
                     {{end}}
                     {{if .OverviewStats}}
                     <div class="table-container mb-0">
@@ -365,6 +386,23 @@
                             </tbody>
                         </table>
                     </div>
+                    {{if gt .OverviewTotalPages 1}}
+                    <nav class="pagination is-small is-centered p-4" role="navigation" aria-label="Suburb pages">
+                        {{if .OverviewHasPrev}}
+                        <a class="pagination-previous" href="/suburbs?suburb_page={{.OverviewPrevPage}}">Previous</a>
+                        {{else}}
+                        <a class="pagination-previous" disabled>Previous</a>
+                        {{end}}
+                        {{if .OverviewHasNext}}
+                        <a class="pagination-next" href="/suburbs?suburb_page={{.OverviewNextPage}}">Next</a>
+                        {{else}}
+                        <a class="pagination-next" disabled>Next</a>
+                        {{end}}
+                        <ul class="pagination-list">
+                            <li><span class="pagination-link is-current" aria-current="page">Page {{.OverviewPage}} of {{.OverviewTotalPages}}</span></li>
+                        </ul>
+                    </nav>
+                    {{end}}
                     {{else}}
                     <div class="notification is-info is-light m-4">
                         Suburb statistics are being calculated for the first time. Refresh this page in a moment.

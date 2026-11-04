@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -77,6 +80,9 @@ func TestTemplatesRenderCorrectPage(t *testing.T) {
 		{"postcode.html", PageData{QueryPostcode: "2071", PostcodeSummary: &database.GetPostcodeSummaryRow{PropertyCount: 2, SalesCount: 1, MedianPrice: 600000}}, "Postcode 2071", "Properties in 2071"},
 		{"property.html", PageData{Property: database.GnafProperty{GnafPid: "PID", StreetName: "TEST", StreetType: "ST", Suburb: "SUBURB", State: "NSW", Postcode: "2000"}}, "TEST ST", "Sales history"},
 		{"suburb.html", PageData{}, "Suburb Market Trends", "Suburb market trends"},
+		{"most_losses.html", PageData{}, "Suburbs with the Most Losses", "Suburbs with the most losses"},
+		{"growth.html", PageData{GrowthRange: "5", GrowthMinSales: 20}, "Fastest Growing Suburbs", "Fastest growing suburbs"},
+		{"compare.html", PageData{CompareRange: "10"}, "Compare Suburbs", "Choose suburbs to compare"},
 		{"submit.html", PageData{CSRFToken: "token", TodayDate: "2026-01-01"}, "Add a Sale", "Submit sale record"},
 		{"losses.html", PageData{SelectedSuburb: "TEST", SelectedState: "NSW"}, "Sold at a Loss", "Properties sold at a loss"},
 		{"building.html", PageData{BuildingAddress: "TEST BUILDING", BuildingBasePID: "BASE"}, "TEST BUILDING", "Units and properties"},
@@ -282,6 +288,12 @@ func TestSuburbLosses(t *testing.T) {
 	if !strings.Contains(body, "of 2 resales") {
 		t.Errorf("expected resale count to exclude same-day/single-sale properties")
 	}
+	if !strings.Contains(body, "/suburbs/most-losses") {
+		t.Errorf("loss detail page missing link to the suburb ranking")
+	}
+	if !strings.Contains(body, "20.0%") {
+		t.Errorf("loss detail page missing average loss percentage")
+	}
 
 	for _, sortKey := range []string{"percent", "date"} {
 		rec := httptest.NewRecorder()
@@ -290,6 +302,108 @@ func TestSuburbLosses(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Errorf("sort %s: status %d", sortKey, rec.Code)
 		}
+	}
+}
+
+func TestSuburbLossRanking(t *testing.T) {
+	app, cleanup := newTestApp(t)
+	defer cleanup()
+
+	oldDate := time.Now().AddDate(-5, 0, 0).Format("2006-01-02")
+	recentDate := time.Now().AddDate(-1, 0, 0).Format("2006-01-02")
+
+	seedProperty(t, app, "PID-ALPHA-1", "ONE", "ALPHA", "NSW")
+	seedSale(t, app, "S-ALPHA-1A", "PID-ALPHA-1", oldDate, 500000, "Auction")
+	seedSale(t, app, "S-ALPHA-1B", "PID-ALPHA-1", recentDate, 400000, "Private Treaty")
+	seedProperty(t, app, "PID-ALPHA-2", "TWO", "ALPHA", "NSW")
+	seedSale(t, app, "S-ALPHA-2A", "PID-ALPHA-2", oldDate, 300000, "Auction")
+	seedSale(t, app, "S-ALPHA-2B", "PID-ALPHA-2", recentDate, 350000, "Private Treaty")
+
+	seedProperty(t, app, "PID-BRAVO-1", "ONE", "BRAVO", "NSW")
+	seedSale(t, app, "S-BRAVO-1A", "PID-BRAVO-1", oldDate, 1000000, "Auction")
+	seedSale(t, app, "S-BRAVO-1B", "PID-BRAVO-1", recentDate, 100000, "Private Treaty")
+
+	if err := database.RefreshSuburbLossStats(context.Background(), app.db); err != nil {
+		t.Fatalf("refresh loss stats: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	app.handleSuburbLossRanking(rec, httptest.NewRequest(http.MethodGet, "/suburbs/most-losses", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default status: %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Suburbs with the most losses", "ALPHA", "BRAVO", "View losses", "Loss-making resales", "Most losses"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("default page missing %q", want)
+		}
+	}
+	if strings.Index(body, "BRAVO") > strings.Index(body, "ALPHA") && strings.Contains(body, "BRAVO") {
+		t.Errorf("default order should place BRAVO first on equal loss counts")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbLossRanking(rec, httptest.NewRequest(http.MethodGet, "/suburbs/most-losses?sort=rate", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rate status: %d", rec.Code)
+	}
+	body = rec.Body.String()
+	if !strings.Contains(body, "Highest loss rate") || !strings.Contains(body, "at least 20 resales") {
+		t.Errorf("rate page missing threshold context")
+	}
+	if !strings.Contains(body, "No suburbs meet this ranking threshold") {
+		t.Errorf("rate page should explain that no suburb meets the threshold")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbLossRanking(rec, httptest.NewRequest(http.MethodGet, "/suburbs/most-losses?sort=average_loss", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("average loss status: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Largest average loss") || !strings.Contains(rec.Body.String(), "Average loss") {
+		t.Errorf("average loss page missing average-loss context")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbLossRanking(rec, httptest.NewRequest(http.MethodGet, "/suburbs/most-losses?sort=bogus&page=999", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bogus sort status: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Most losses") {
+		t.Errorf("bogus sort did not fall back to losses")
+	}
+}
+
+func TestSuburbLossRankingEmptyAndRedirect(t *testing.T) {
+	app, cleanup := newTestApp(t)
+	defer cleanup()
+
+	rec := httptest.NewRecorder()
+	app.handleSuburbLossRanking(rec, httptest.NewRequest(http.MethodGet, "/suburbs/most-losses", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty status: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "being prepared") {
+		t.Errorf("empty ranking should show the building notice")
+	}
+
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/suburbs/losses", nil)
+	app.handleSuburbLosses(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("redirect status: %d", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/suburbs/most-losses" {
+		t.Errorf("redirect location = %q, want /suburbs/most-losses", got)
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbAnalytics(rec, httptest.NewRequest(http.MethodGet, "/suburbs", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("suburbs status: %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "/suburbs/most-losses") {
+		t.Errorf("suburb overview missing link to the loss ranking")
 	}
 }
 
@@ -1340,5 +1454,356 @@ func TestMaterializedStatsLifecycleAndReadiness(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"stats_status":"ready"`) {
 		t.Errorf("readyz did not expose stats status: %s", rec.Body.String())
+	}
+}
+
+func TestPropertyPageShowsLandValueAndComparables(t *testing.T) {
+	app, cleanup := newTestApp(t)
+	defer cleanup()
+
+	seedPropertyWithNumber(t, app, "SUBJECT", "1", "OAK", "TESTVILLE", "NSW", "2000")
+	seedPropertyWithNumber(t, app, "COMP-1", "2", "OAK", "TESTVILLE", "NSW", "2000")
+	seedPropertyWithNumber(t, app, "COMP-2", "3", "PINE", "TESTVILLE", "NSW", "2000")
+	if _, err := app.db.Exec(`
+		UPDATE gnaf_properties
+		SET land_area = CASE gnaf_pid
+				WHEN 'SUBJECT' THEN 500
+				WHEN 'COMP-1' THEN 520
+				ELSE 1000
+			END,
+			dwelling_type = 'house'
+		WHERE gnaf_pid IN ('SUBJECT', 'COMP-1', 'COMP-2')
+	`); err != nil {
+		t.Fatalf("set land area: %v", err)
+	}
+
+	recent := time.Now().AddDate(0, -1, 0).Format("2006-01-02")
+	seedSale(t, app, "S-SUBJECT", "SUBJECT", recent, 1000000, "Public Registry")
+	seedSale(t, app, "S-COMP-1", "COMP-1", recent, 1040000, "Public Registry")
+	seedSale(t, app, "S-COMP-2", "COMP-2", recent, 2000000, "Public Registry")
+
+	req := httptest.NewRequest(http.MethodGet, "/property/SUBJECT", nil)
+	req.SetPathValue("pid", "SUBJECT")
+	rec := httptest.NewRecorder()
+	app.handlePropertyDetail(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("property page status = %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		"$2,000/m² on 500 m²",
+		"Comparable sales",
+		"Median land value",
+		"Same street",
+		"2 with land area",
+		"OAK ST",
+		"PINE ST",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("property page missing %q", want)
+		}
+	}
+}
+
+func TestHealthz(t *testing.T) {
+	app, cleanup := newTestApp(t)
+	defer cleanup()
+
+	rec := httptest.NewRecorder()
+	app.handleHealthz(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("healthz status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Errorf("healthz content-type = %q", got)
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"ok"`) {
+		t.Errorf("healthz body = %q", rec.Body.String())
+	}
+}
+
+func TestClientIPOnlyTrustsConfiguredProxies(t *testing.T) {
+	trusted, err := parseTrustedProxies("127.0.0.1,10.0.0.0/8,::1")
+	if err != nil {
+		t.Fatalf("parse trusted proxies: %v", err)
+	}
+
+	cases := []struct {
+		name       string
+		trusted    *ipTrustList
+		remoteAddr string
+		forwarded  string
+		want       string
+	}{
+		{
+			name:       "untrusted peer ignores forwarded header",
+			trusted:    trusted,
+			remoteAddr: "203.0.113.5:1234",
+			forwarded:  "198.51.100.7",
+			want:       "203.0.113.5",
+		},
+		{
+			name:       "trusted peer uses rightmost untrusted hop",
+			trusted:    trusted,
+			remoteAddr: "127.0.0.1:1234",
+			forwarded:  "198.51.100.7, 10.1.2.3",
+			want:       "198.51.100.7",
+		},
+		{
+			name:       "trusted peer with single forwarded address",
+			trusted:    trusted,
+			remoteAddr: "127.0.0.1:1234",
+			forwarded:  "203.0.113.9",
+			want:       "203.0.113.9",
+		},
+		{
+			name:       "all forwarded hops trusted falls back to leftmost",
+			trusted:    trusted,
+			remoteAddr: "127.0.0.1:1234",
+			forwarded:  "10.1.2.3, 10.2.3.4",
+			want:       "10.1.2.3",
+		},
+		{
+			name:       "ipv6 trusted peer",
+			trusted:    trusted,
+			remoteAddr: "[::1]:1234",
+			forwarded:  "2001:db8::1",
+			want:       "2001:db8::1",
+		},
+		{
+			name:       "no trusted configuration ignores forwarded header",
+			trusted:    nil,
+			remoteAddr: "127.0.0.1:1234",
+			forwarded:  "198.51.100.7",
+			want:       "127.0.0.1",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := &App{trustedProxies: tc.trusted}
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.RemoteAddr = tc.remoteAddr
+			if tc.forwarded != "" {
+				req.Header.Set("X-Forwarded-For", tc.forwarded)
+			}
+			if got := app.clientIP(req); got != tc.want {
+				t.Errorf("clientIP = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseTrustedProxiesRejectsInvalidValues(t *testing.T) {
+	for _, value := range []string{"not-an-ip", "10.0.0.0/not-a-mask", "127.0.0.1/33"} {
+		if _, err := parseTrustedProxies(value); err == nil {
+			t.Errorf("parseTrustedProxies(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestSuburbOverviewPagination(t *testing.T) {
+	app, cleanup := newTestApp(t)
+	defer cleanup()
+
+	for i := 1; i <= 55; i++ {
+		suburb := fmt.Sprintf("SUB%03d", i)
+		if _, err := app.db.Exec(`
+			INSERT INTO suburb_stats (
+				suburb, state, property_count, sales_count, avg_price, max_price, min_price
+			) VALUES (?, 'NSW', 1, ?, 500000, 500000, 500000)
+		`, suburb, 100-i); err != nil {
+			t.Fatalf("seed suburb stats %s: %v", suburb, err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	app.handleSuburbAnalytics(rec, httptest.NewRequest(http.MethodGet, "/suburbs?suburb_page=2", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("page 2 status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"SUB051", "SUB055", "Page 2 of 2", "55 suburbs"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page 2 missing %q", want)
+		}
+	}
+	if strings.Contains(body, "SUB001") {
+		t.Errorf("page 2 unexpectedly contains a page-1 suburb")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbAnalytics(rec, httptest.NewRequest(http.MethodGet, "/suburbs?suburb_page=99", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("out-of-range page status = %d", rec.Code)
+	}
+	body = rec.Body.String()
+	if !strings.Contains(body, "Page 2 of 2") || !strings.Contains(body, "SUB051") {
+		t.Errorf("out-of-range page did not clamp to the last page")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbAnalytics(rec, httptest.NewRequest(http.MethodGet, "/suburbs", nil))
+	body = rec.Body.String()
+	if !strings.Contains(body, "Page 1 of 2") || !strings.Contains(body, "SUB001") {
+		t.Errorf("page 1 did not render the first page")
+	}
+}
+
+func TestRequestLoggingCapturesStatusAndSize(t *testing.T) {
+	var buf bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(oldWriter)
+
+	handler := withRequestLogging(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write([]byte("hello"))
+	}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/log-test", nil))
+
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("status = %d, want 418", rec.Code)
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "GET /log-test 418 5B") {
+		t.Errorf("access log missing status/size: %q", logged)
+	}
+}
+
+func seedSuburbStatRow(t *testing.T, app *App, suburb string, sales int64, c1, c5, c10 any) {
+	t.Helper()
+	if _, err := app.db.Exec(`
+		INSERT INTO suburb_stats (
+			suburb, state, property_count, sales_count, avg_price, max_price, min_price,
+			change_1y, change_5y, change_10y
+		) VALUES (?, 'NSW', 10, ?, 800000, 900000, 700000, ?, ?, ?)
+	`, suburb, sales, c1, c5, c10); err != nil {
+		t.Fatalf("seed suburb stat %s: %v", suburb, err)
+	}
+}
+
+func TestSuburbGrowthPageRanksAndFilters(t *testing.T) {
+	app, cleanup := newTestApp(t)
+	defer cleanup()
+
+	seedSuburbStatRow(t, app, "ALPHA", 100, 10.0, 20.0, 30.0)
+	seedSuburbStatRow(t, app, "BETA", 50, -10.0, -5.0, 5.0)
+	seedSuburbStatRow(t, app, "GAMMA", 10, 99.0, 50.0, 80.0)
+
+	rec := httptest.NewRecorder()
+	app.handleSuburbGrowth(rec, httptest.NewRequest(http.MethodGet, "/suburbs/growth?range=5&direction=top&min_sales=20", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("growth page status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Fastest growing suburbs", "ALPHA", "BETA", "20.0%"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("growth page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "GAMMA") {
+		t.Errorf("growth page included a suburb below the minimum-sales threshold")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbGrowth(rec, httptest.NewRequest(http.MethodGet, "/suburbs/growth?range=5&direction=bottom&min_sales=20", nil))
+	body = rec.Body.String()
+	if !strings.Contains(body, "Slowest growing suburbs") {
+		t.Errorf("bottom growth page missing heading")
+	}
+	if strings.Index(body, "BETA") > strings.Index(body, "ALPHA") {
+		t.Errorf("bottom growth page did not put BETA before ALPHA")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbGrowth(rec, httptest.NewRequest(http.MethodGet, "/suburbs/growth?range=5&direction=top&min_sales=10", nil))
+	body = rec.Body.String()
+	if !strings.Contains(body, "GAMMA") || !strings.Contains(body, "50.0%") {
+		t.Errorf("lower threshold did not include GAMMA")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbGrowth(rec, httptest.NewRequest(http.MethodGet, "/suburbs/growth?range=1&direction=top&min_sales=20", nil))
+	body = rec.Body.String()
+	if !strings.Contains(body, "10.0%") {
+		t.Errorf("1-year growth did not use change_1y")
+	}
+}
+
+func TestSuburbComparePage(t *testing.T) {
+	app, cleanup := newTestApp(t)
+	defer cleanup()
+
+	for _, suburb := range []string{"KILLARA", "ROTHBURY", "CHATSWOOD", "BONDI", "MANLY"} {
+		seedProperty(t, app, "PID-"+suburb, "TEST", suburb, "NSW")
+		seedSuburbStatRow(t, app, suburb, 100, 10.0, 20.0, 30.0)
+	}
+	recent := time.Now().AddDate(0, -1, 0).Format("2006-01-02")
+	older := time.Now().AddDate(0, -2, 0).Format("2006-01-02")
+	seedSale(t, app, "S-K1", "PID-KILLARA", recent, 1000000, "Public Registry")
+	seedSale(t, app, "S-K2", "PID-KILLARA", older, 900000, "Public Registry")
+	seedSale(t, app, "S-R1", "PID-ROTHBURY", recent, 700000, "Public Registry")
+
+	rec := httptest.NewRecorder()
+	app.handleSuburbCompare(rec, httptest.NewRequest(http.MethodGet, "/compare?suburbs=KILLARA%7CNSW,ROTHBURY%7CNSW&range=10", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("compare page status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"Market comparison",
+		"KILLARA",
+		"ROTHBURY",
+		`"label":"KILLARA, NSW"`,
+		`"label":"ROTHBURY, NSW"`,
+		"compareChart",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("compare page missing %q", want)
+		}
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbCompare(rec, httptest.NewRequest(http.MethodGet, "/compare?suburbs=KILLARA%7CNSW,NOPE%7CNSW", nil))
+	body = rec.Body.String()
+	if !strings.Contains(body, "Some suburbs could not be found") || !strings.Contains(body, "NOPE|NSW") {
+		t.Errorf("compare page did not report the missing suburb")
+	}
+
+	rec = httptest.NewRecorder()
+	app.handleSuburbCompare(rec, httptest.NewRequest(http.MethodGet, "/compare?suburbs=KILLARA%7CNSW,ROTHBURY%7CNSW,CHATSWOOD%7CNSW,BONDI%7CNSW,MANLY%7CNSW", nil))
+	body = rec.Body.String()
+	if !strings.Contains(body, "Only the first 4 suburbs are compared") {
+		t.Errorf("compare page did not enforce the 4-suburb limit")
+	}
+}
+
+func TestBuildCompareChartJSONAlignsMonths(t *testing.T) {
+	items := []SuburbComparison{
+		{Key: "A|NSW", Suburb: "A", State: "NSW"},
+		{Key: "B|NSW", Suburb: "B", State: "NSW"},
+	}
+	monthly := map[string][]database.GetSuburbMonthlyAveragesRow{
+		"A|NSW": {
+			{Month: "2024-01", AvgPrice: 100},
+			{Month: "2024-03", AvgPrice: 300},
+		},
+		"B|NSW": {
+			{Month: "2024-02", AvgPrice: 200},
+		},
+	}
+
+	got := string(buildCompareChartJSON(items, monthly))
+	for _, want := range []string{
+		`"labels":["2024-01","2024-02","2024-03"]`,
+		`"data":[100,null,300],"label":"A, NSW"`,
+		`"data":[null,200,null],"label":"B, NSW"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("chart JSON missing %q in %s", want, got)
+		}
 	}
 }

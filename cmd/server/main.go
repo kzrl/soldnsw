@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,11 +36,49 @@ import (
 )
 
 const (
-	suburbSalesPageSize = 50
-	minSaleDate         = "1990-01-01"
-	maxFutureSettlement = 30 * 24 * time.Hour
-	maxRequestBodyBytes = 64 << 10
+	suburbSalesPageSize    = 50
+	suburbOverviewPageSize = 50
+	growthMinSalesDefault  = 20
+	growthMinSalesMax      = 1000
+	maxCompareSuburbs      = 4
+	minSaleDate            = "1990-01-01"
+	maxFutureSettlement    = 30 * 24 * time.Hour
+	maxRequestBodyBytes    = 64 << 10
 )
+
+// version is the short VCS revision embedded by the Go toolchain, or "dev"
+// for builds outside a repository.
+var version = detectVersion()
+
+func detectVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	rev := ""
+	dirty := false
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			rev = setting.Value
+		case "vcs.modified":
+			dirty = setting.Value == "true"
+		}
+	}
+	if rev == "" {
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return info.Main.Version
+		}
+		return "dev"
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if dirty {
+		rev += "-dirty"
+	}
+	return rev
+}
 
 // App holds application state, database connection, templates, and queries.
 type App struct {
@@ -62,6 +101,8 @@ type App struct {
 	statsUpdated time.Time
 	statsError   string
 	statsTimeout time.Duration
+
+	trustedProxies *ipTrustList
 }
 
 // FlashMessage structure for user feedback.
@@ -80,6 +121,49 @@ type SaleWithChange struct {
 	ChangePercent  float64
 	HasChange      bool
 	IsLatest       bool
+	PricePerSqm    int64
+}
+
+// ComparableSummary summarises the comparable sales shown on a property page.
+type ComparableSummary struct {
+	Count             int
+	SameStreetCount   int
+	MedianPrice       int64
+	MedianPricePerSqm int64
+	PricePerSqmCount  int
+	MedianLandArea    float64
+	LandAreaCount     int
+}
+
+// suburbLossRankRow is one leaderboard row with its page rank.
+type suburbLossRankRow struct {
+	database.ListSuburbLossStatsRow
+	Rank int
+}
+
+// suburbGrowthRow is one growth leaderboard row with its page rank.
+type suburbGrowthRow struct {
+	database.ListSuburbGrowthRow
+	Rank int
+}
+
+// SuburbComparison is one column on the suburb comparison page.
+type SuburbComparison struct {
+	Key               string
+	Suburb            string
+	State             string
+	PropertyCount     int64
+	SalesCount        int64
+	AvgPrice          int64
+	RangeAvgPrice     int64
+	MedianPrice       int64
+	MedianPricePerSqm int64
+	RangeSales        int64
+	SqmSampleCount    int64
+	Change1y          sql.NullFloat64
+	Change5y          sql.NullFloat64
+	Change10y         sql.NullFloat64
+	UpdatedAt         string
 }
 
 // LossTypeCount summarises loss-making resales for one dwelling type.
@@ -100,94 +184,121 @@ type QueryParam struct {
 
 // PageData represents common and view-specific template data.
 type PageData struct {
-	Title              string
-	ActiveNav          string
-	Flash              *FlashMessage
-	QueryAddress       string
-	QuerySuburb        string
-	QueryStreet        string
-	QueryStreetType    string
-	QueryNumber        string
-	QueryState         string
-	QueryPostcode      string
-	QueryDwellingType  string
-	SearchMode         string
-	SearchError        string
-	HasSearched        bool
-	Properties         []database.GnafProperty
-	StreetMatches      []database.SearchStreetGroupsRow
-	StreetSummary      *database.GetStreetSummaryRow
-	PostcodeSummary    *database.GetPostcodeSummaryRow
-	PostcodeSuburbs    []database.GetPostcodeSuburbsRow
-	ResultTotal        int64
-	QuerySort          string
-	QueryOnlyWithSales bool
-	AllowRelevanceSort bool
-	PagerBaseURL       string
-	FilterAction       string
-	FilterParams       []QueryParam
-	RecentSales        []database.ListRecentSalesWithAddressRow
-	TotalProperties    int64
-	TotalSales         int64
-	TotalSuburbs       int
-	Property           database.GnafProperty
-	IsPSI              bool
-	Sales              []database.PropertySale
-	SelectedSuburb     string
-	SelectedState      string
-	Analytics          *database.GetSuburbAnalyticsRow
-	MaxSale            *database.GetSuburbExtremeSalesRow
-	MinSale            *database.GetSuburbExtremeSalesRow
-	OverviewStats      []database.GetSuburbOverviewStatsRow
-	OverviewTotal      int
-	SuburbSales        []database.GetSuburbSalesBySuburbRow
-	SuburbSalesTotal   int64
-	ShowingFrom        int
-	ShowingTo          int
-	Page               int
-	TotalPages         int
-	HasPrev            bool
-	HasNext            bool
-	PrevPage           int
-	NextPage           int
-	ChartLabels        []string
-	ChartValues        []int64
-	ChartRange         string
-	PriceRange         string
-	PriceWindow        string
-	PriceLabel         string
-	PriceNote          string
-	SalesWithChange    []SaleWithChange
-	TotalChangeAmount  int64
-	TotalChangePercent float64
-	HasTotalChange     bool
-	HasDataWarning     bool
-	DataWarningPercent float64
-	LatestSaleDate     string
-	TopSuburbs         []database.GetTopSuburbsRow
-	BuildingBasePID    string
-	BuildingAddress    string
-	BuildingSuburb     string
-	BuildingState      string
-	BuildingUnits      []database.GetBuildingUnitsByBasePIDRow
-	BuildingUnitCount  int
-	BuildingSalesCount int64
-	LossSummary        *database.GetSuburbLossSummaryRow
-	LossSales          []database.GetSuburbLossesRow
-	LossTotal          int64
-	LossRate           float64
-	LossRange          string
-	LossSort           string
-	LossType           string
-	LossTypeCounts     []LossTypeCount
-	PreFillPID         string
-	PrefillProperty    *database.GnafProperty
-	TodayDate          string
-	MaxSaleDate        string
-	CSRFToken          string
-	LastImportDate     string
-	StatsStatus        string
-	StatsUpdated       string
+	Title                string
+	ActiveNav            string
+	Flash                *FlashMessage
+	QueryAddress         string
+	QuerySuburb          string
+	QueryStreet          string
+	QueryStreetType      string
+	QueryNumber          string
+	QueryState           string
+	QueryPostcode        string
+	QueryDwellingType    string
+	SearchMode           string
+	SearchError          string
+	HasSearched          bool
+	Properties           []database.GnafProperty
+	StreetMatches        []database.SearchStreetGroupsRow
+	StreetSummary        *database.GetStreetSummaryRow
+	PostcodeSummary      *database.GetPostcodeSummaryRow
+	PostcodeSuburbs      []database.GetPostcodeSuburbsRow
+	ResultTotal          int64
+	QuerySort            string
+	QueryOnlyWithSales   bool
+	AllowRelevanceSort   bool
+	PagerBaseURL         string
+	PagerAnchor          string
+	FilterAction         string
+	FilterParams         []QueryParam
+	RecentSales          []database.ListRecentSalesWithAddressRow
+	TotalProperties      int64
+	TotalSales           int64
+	TotalSuburbs         int
+	Property             database.GnafProperty
+	IsPSI                bool
+	Sales                []database.PropertySale
+	SelectedSuburb       string
+	SelectedState        string
+	Analytics            *database.GetSuburbAnalyticsRow
+	MaxSale              *database.GetSuburbExtremeSalesRow
+	MinSale              *database.GetSuburbExtremeSalesRow
+	OverviewStats        []database.GetSuburbOverviewStatsRow
+	OverviewTotal        int
+	OverviewPage         int
+	OverviewTotalPages   int
+	OverviewHasPrev      bool
+	OverviewHasNext      bool
+	OverviewPrevPage     int
+	OverviewNextPage     int
+	SuburbSales          []database.GetSuburbSalesBySuburbRow
+	SuburbSalesTotal     int64
+	ShowingFrom          int
+	ShowingTo            int
+	Page                 int
+	TotalPages           int
+	HasPrev              bool
+	HasNext              bool
+	PrevPage             int
+	NextPage             int
+	ChartLabels          []string
+	ChartValues          []int64
+	ChartRange           string
+	PriceRange           string
+	PriceWindow          string
+	PriceLabel           string
+	PriceNote            string
+	SalesWithChange      []SaleWithChange
+	TotalChangeAmount    int64
+	TotalChangePercent   float64
+	HasTotalChange       bool
+	HasDataWarning       bool
+	DataWarningPercent   float64
+	LatestSaleDate       string
+	LatestPricePerSqm    int64
+	Comparables          []database.GetPropertyComparablesRow
+	ComparableSummary    *ComparableSummary
+	ComparablesWindow    string
+	TopSuburbs           []database.GetTopSuburbsRow
+	BuildingBasePID      string
+	BuildingAddress      string
+	BuildingSuburb       string
+	BuildingState        string
+	BuildingUnits        []database.GetBuildingUnitsByBasePIDRow
+	BuildingUnitCount    int
+	BuildingSalesCount   int64
+	LossSummary          *database.GetSuburbLossSummaryRow
+	LossSales            []database.GetSuburbLossesRow
+	LossTotal            int64
+	SuburbLossStats      []suburbLossRankRow
+	SuburbLossSummary    database.GetSuburbLossStatsSummaryRow
+	LossRankingSort      string
+	LossRateMinResales   int64
+	LossAverageMinLosses int64
+	LossRate             float64
+	LossRange            string
+	LossSort             string
+	LossType             string
+	LossTypeCounts       []LossTypeCount
+	GrowthRows           []suburbGrowthRow
+	GrowthSummary        database.GetSuburbGrowthSummaryRow
+	GrowthRange          string
+	GrowthDirection      string
+	GrowthMinSales       int64
+	CompareSuburbs       []SuburbComparison
+	CompareChartJSON     template.JS
+	CompareRaw           string
+	CompareRange         string
+	CompareMissing       []string
+	CompareLimitReached  bool
+	PreFillPID           string
+	PrefillProperty      *database.GnafProperty
+	TodayDate            string
+	MaxSaleDate          string
+	CSRFToken            string
+	LastImportDate       string
+	StatsStatus          string
+	StatsUpdated         string
 }
 
 // Custom template helper functions.
@@ -214,10 +325,12 @@ func templateFuncs() template.FuncMap {
 			}
 			return sign + "$" + formatPriceInt(n)
 		},
-		"toPriceInt":  priceToInt,
-		"formatCount": formatCount,
-		"formatDate":  formatDate,
-		"formatArea":  formatArea,
+		"toPriceInt":     priceToInt,
+		"formatCount":    formatCount,
+		"formatDate":     formatDate,
+		"formatDateTime": formatDateTime,
+		"formatArea":     formatArea,
+		"rangeLabel":     priceRangeLabel,
 		"dwellingLabel": func(value string) string {
 			switch value {
 			case "house":
@@ -357,6 +470,20 @@ func formatDate(value any) string {
 	return t.Format("2 Jan 2006")
 }
 
+// formatDateTime formats database timestamps for display.
+func formatDateTime(value any) string {
+	s, ok := value.(string)
+	if !ok || s == "" {
+		return ""
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05", time.RFC3339, "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.Format("2 Jan 2006, 3:04 pm")
+		}
+	}
+	return s
+}
+
 // propertyAddress formats a property's street address without leading spaces.
 func propertyAddress(prop database.GnafProperty) string {
 	parts := make([]string, 0, 3)
@@ -403,6 +530,7 @@ func main() {
 	templateDir := flag.String("templates", "templates", "Directory containing SSR HTML templates")
 	staticDir := flag.String("static", "static", "Directory containing static assets")
 	statsTimeoutSec := flag.Int("stats-timeout", 120, "Timeout in seconds for each materialised stats rebuild attempt")
+	trustedProxiesFlag := flag.String("trusted-proxies", "", "Comma-separated proxy IPs/CIDRs allowed to set X-Forwarded-For (for example 127.0.0.1,::1)")
 	flag.Parse()
 
 	// Environment variable overrides.
@@ -411,6 +539,9 @@ func main() {
 	}
 	if envDB := os.Getenv("DB_PATH"); envDB != "" {
 		*dbPath = envDB
+	}
+	if envProxies := os.Getenv("TRUSTED_PROXIES"); envProxies != "" {
+		*trustedProxiesFlag = envProxies
 	}
 
 	log.Printf("Connecting to SQLite database at: %s", *dbPath)
@@ -473,6 +604,9 @@ func main() {
 		if err := database.RefreshPostcodeStats(context.Background(), db); err != nil {
 			log.Printf("Warning: postcode statistics refresh failed: %v", err)
 		}
+		if err := database.RefreshSuburbLossStats(context.Background(), db); err != nil {
+			log.Printf("Warning: suburb loss statistics refresh failed: %v", err)
+		}
 	}
 	if err := database.EnsureAddressSearch(context.Background(), db); err != nil {
 		log.Fatalf("Failed to build address search index: %v", err)
@@ -496,6 +630,14 @@ func main() {
 	if *statsTimeoutSec > 0 {
 		app.statsTimeout = time.Duration(*statsTimeoutSec) * time.Second
 	}
+	trustedProxies, err := parseTrustedProxies(*trustedProxiesFlag)
+	if err != nil {
+		log.Fatalf("Invalid -trusted-proxies value: %v", err)
+	}
+	app.trustedProxies = trustedProxies
+	if trustedProxies != nil {
+		log.Printf("Trusting X-Forwarded-For from %d proxy network(s)", len(trustedProxies.nets))
+	}
 
 	mux := http.NewServeMux()
 	fs := http.FileServer(http.Dir(*staticDir))
@@ -503,13 +645,17 @@ func main() {
 
 	mux.HandleFunc("GET /", app.handleHome)
 	mux.HandleFunc("GET /properties", app.handlePropertiesSearch)
+	mux.HandleFunc("GET /healthz", app.handleHealthz)
 	mux.HandleFunc("GET /readyz", app.handleReadyz)
 	mux.HandleFunc("GET /api/address/suggest", app.handleAddressSuggest)
 	mux.HandleFunc("GET /api/search/suggest", app.handleSearchSuggest)
 	mux.HandleFunc("GET /property/{pid}", app.handlePropertyDetail)
 	mux.HandleFunc("GET /building/{base_pid}", app.handleBuilding)
 	mux.HandleFunc("GET /suburbs", app.handleSuburbAnalytics)
+	mux.HandleFunc("GET /suburbs/growth", app.handleSuburbGrowth)
 	mux.HandleFunc("GET /suburbs/losses", app.handleSuburbLosses)
+	mux.HandleFunc("GET /suburbs/most-losses", app.handleSuburbLossRanking)
+	mux.HandleFunc("GET /compare", app.handleSuburbCompare)
 	mux.HandleFunc("GET /postcode/{code}", app.handlePostcodePage)
 	mux.HandleFunc("GET /submit", app.handleSubmitForm)
 	mux.HandleFunc("POST /submit", app.handleSubmitAction)
@@ -530,6 +676,7 @@ func main() {
 
 	log.Printf("========================================================")
 	log.Printf(" SoldNSW Server listening on http://localhost%s", srv.Addr)
+	log.Printf(" Version: %s", version)
 	log.Printf("========================================================")
 
 	stop := make(chan os.Signal, 1)
@@ -564,7 +711,7 @@ func sqliteDSN(path string) string {
 // single namespace makes their identically named "title"/"content" defines
 // overwrite each other, so every route would render the last page parsed.
 func parseTemplates(dir string) (map[string]*template.Template, error) {
-	pages := []string{"index.html", "postcode.html", "property.html", "suburb.html", "submit.html", "losses.html", "building.html", "404.html"}
+	pages := []string{"index.html", "postcode.html", "property.html", "suburb.html", "submit.html", "losses.html", "building.html", "most_losses.html", "growth.html", "compare.html", "404.html"}
 	sets := make(map[string]*template.Template, len(pages))
 	for _, page := range pages {
 		t, err := template.New("base.html").Funcs(templateFuncs()).ParseFiles(
@@ -663,7 +810,7 @@ func (app *App) ensureMaterializedStats() {
 }
 
 func (app *App) materializedStatsReady() (bool, error) {
-	for _, table := range []string{"suburb_stats", "street_stats", "postcode_stats"} {
+	for _, table := range []string{"suburb_stats", "street_stats", "postcode_stats", "suburb_loss_stats"} {
 		var count int64
 		if err := app.db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
 			return false, fmt.Errorf("count %s: %w", table, err)
@@ -676,7 +823,7 @@ func (app *App) materializedStatsReady() (bool, error) {
 }
 
 func (app *App) rebuildMissingStats(ctx context.Context) error {
-	var suburbCount, streetCount, postcodeCount int64
+	var suburbCount, streetCount, postcodeCount, lossCount int64
 	if err := app.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM suburb_stats").Scan(&suburbCount); err != nil {
 		return fmt.Errorf("count suburb stats: %w", err)
 	}
@@ -685,6 +832,9 @@ func (app *App) rebuildMissingStats(ctx context.Context) error {
 	}
 	if err := app.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM postcode_stats").Scan(&postcodeCount); err != nil {
 		return fmt.Errorf("count postcode stats: %w", err)
+	}
+	if err := app.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM suburb_loss_stats").Scan(&lossCount); err != nil {
+		return fmt.Errorf("count suburb loss stats: %w", err)
 	}
 	if suburbCount == 0 {
 		log.Printf("Building suburb statistics for the first time; this can take a moment on a large dataset...")
@@ -704,10 +854,23 @@ func (app *App) rebuildMissingStats(ctx context.Context) error {
 			return err
 		}
 	}
+	if lossCount == 0 {
+		log.Printf("Building suburb loss rankings...")
+		if err := database.RefreshSuburbLossStats(ctx, app.db); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // handleReadyz reports database and materialised-stats readiness.
+// handleHealthz reports that the process is alive. It deliberately does not
+// touch the database; use /readyz for dependency readiness.
+func (app *App) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version})
+}
+
 func (app *App) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	pingErr := app.db.PingContext(r.Context())
@@ -939,7 +1102,7 @@ func (app *App) handleSearchSuggest(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("[]"))
 		return
 	}
-	if app.suggestLimiter != nil && !app.suggestLimiter.allow(clientIP(r)) {
+	if app.suggestLimiter != nil && !app.suggestLimiter.allow(app.clientIP(r)) {
 		w.WriteHeader(http.StatusTooManyRequests)
 		_ = json.NewEncoder(w).Encode([]searchSuggestion{})
 		return
@@ -1411,6 +1574,7 @@ func (app *App) renderStreetGroups(w http.ResponseWriter, r *http.Request, addre
 	values := r.URL.Query()
 	values.Del("page")
 	data.PagerBaseURL = pagerBaseURL("/properties", values)
+	data.PagerAnchor = "#search-results"
 	app.renderTemplate(w, "index.html", data)
 }
 
@@ -1499,6 +1663,7 @@ func (app *App) renderStreetProperties(w http.ResponseWriter, r *http.Request, g
 		pagerValues.Set("only_with_sales", "1")
 	}
 	data.PagerBaseURL = pagerBaseURL("/properties", pagerValues)
+	data.PagerAnchor = "#search-results"
 	data.FilterAction = "/properties"
 	data.FilterParams = queryParams(pagerValues, "dwelling", "sort", "only_with_sales")
 	app.renderTemplate(w, "index.html", data)
@@ -1592,6 +1757,7 @@ func (app *App) renderPostcodePage(w http.ResponseWriter, r *http.Request, postc
 		pagerValues.Set("only_with_sales", "1")
 	}
 	data.PagerBaseURL = pagerBaseURL("/postcode/"+postcode, pagerValues)
+	data.PagerAnchor = "#properties"
 	data.FilterAction = "/postcode/" + postcode
 	data.FilterParams = queryParams(pagerValues, "dwelling", "sort", "only_with_sales")
 	app.renderTemplate(w, "postcode.html", data)
@@ -1770,6 +1936,7 @@ func (app *App) handlePropertiesSearch(w http.ResponseWriter, r *http.Request) {
 			pagerValues.Set("only_with_sales", "1")
 		}
 		data.PagerBaseURL = pagerBaseURL("/properties", pagerValues)
+		data.PagerAnchor = "#search-results"
 		data.FilterAction = "/properties"
 		data.FilterParams = queryParams(pagerValues, "dwelling", "sort", "only_with_sales")
 		app.renderTemplate(w, "index.html", data)
@@ -1989,6 +2156,9 @@ func (app *App) handlePropertyDetail(w http.ResponseWriter, r *http.Request) {
 			SourceType:     sale.SourceType,
 			IsLatest:       i == 0,
 		}
+		if prop.LandArea.Valid && prop.LandArea.Float64 > 0 {
+			item.PricePerSqm = int64(float64(sale.SalePrice) / prop.LandArea.Float64)
+		}
 		if i+1 < len(sales) {
 			previous := sales[i+1]
 			if previous.SalePrice > 0 {
@@ -2000,14 +2170,23 @@ func (app *App) handlePropertyDetail(w http.ResponseWriter, r *http.Request) {
 		withChange = append(withChange, item)
 	}
 
+	comparables, comparableSummary, comparablesWindow := app.loadPropertyComparables(ctx, prop)
+
 	data := PageData{
-		Title:           propertyAddress(prop) + ", " + prop.Suburb + " - Sales History",
-		ActiveNav:       "search",
-		Property:        prop,
-		IsPSI:           strings.HasPrefix(prop.GnafPid, "GANSW_PSI_"),
-		Sales:           sales,
-		SalesWithChange: withChange,
-		Flash:           app.readFlash(w, r),
+		Title:             propertyAddress(prop) + ", " + prop.Suburb + " - Sales History",
+		ActiveNav:         "search",
+		Property:          prop,
+		IsPSI:             strings.HasPrefix(prop.GnafPid, "GANSW_PSI_"),
+		Sales:             sales,
+		SalesWithChange:   withChange,
+		Comparables:       comparables,
+		ComparableSummary: comparableSummary,
+		ComparablesWindow: comparablesWindow,
+		Flash:             app.readFlash(w, r),
+	}
+
+	if len(sales) > 0 && prop.LandArea.Valid && prop.LandArea.Float64 > 0 {
+		data.LatestPricePerSqm = int64(float64(sales[0].SalePrice) / prop.LandArea.Float64)
 	}
 
 	if len(sales) > 1 {
@@ -2025,6 +2204,139 @@ func (app *App) handlePropertyDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	app.renderTemplate(w, "property.html", data)
+}
+
+// loadPropertyComparables returns recent nearby sales for the comparable-sales
+// card. It first tries a two-year window and falls back to all recorded sales
+// when a suburb has too few recent transactions.
+func (app *App) loadPropertyComparables(ctx context.Context, prop database.GnafProperty) ([]database.GetPropertyComparablesRow, *ComparableSummary, string) {
+	params := database.GetPropertyComparablesParams{
+		Pid:      prop.GnafPid,
+		Cutoff:   time.Now().AddDate(-2, 0, 0).Format("2006-01-02"),
+		RowLimit: 8,
+	}
+	rows, err := app.queries.GetPropertyComparables(ctx, params)
+	if err != nil {
+		log.Printf("Error fetching comparables for PID '%s': %v", prop.GnafPid, err)
+		return nil, nil, ""
+	}
+	window := "last 2 years"
+	if len(rows) < 3 {
+		params.Cutoff = minSaleDate
+		rows, err = app.queries.GetPropertyComparables(ctx, params)
+		if err != nil {
+			log.Printf("Error fetching all-time comparables for PID '%s': %v", prop.GnafPid, err)
+			return nil, nil, ""
+		}
+		window = "all recorded sales"
+	}
+	return rows, summariseComparables(rows), window
+}
+
+// summariseComparables computes median price, median land value per square
+// metre and median land area across the comparable-sales set.
+func summariseComparables(rows []database.GetPropertyComparablesRow) *ComparableSummary {
+	if len(rows) == 0 {
+		return nil
+	}
+	summary := &ComparableSummary{Count: len(rows)}
+	prices := make([]int64, 0, len(rows))
+	pricePerSqm := make([]int64, 0, len(rows))
+	areas := make([]float64, 0, len(rows))
+	for _, row := range rows {
+		if row.SameStreet == 1 {
+			summary.SameStreetCount++
+		}
+		prices = append(prices, row.SalePrice)
+		if row.PricePerSqm > 0 {
+			pricePerSqm = append(pricePerSqm, row.PricePerSqm)
+		}
+		if row.LandArea.Valid && row.LandArea.Float64 > 0 {
+			areas = append(areas, row.LandArea.Float64)
+		}
+	}
+	summary.MedianPrice = medianInt64(prices)
+	summary.MedianPricePerSqm = medianInt64(pricePerSqm)
+	summary.PricePerSqmCount = len(pricePerSqm)
+	summary.MedianLandArea = medianFloat64(areas)
+	summary.LandAreaCount = len(areas)
+	return summary
+}
+
+func medianInt64(values []int64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[mid]
+	}
+	return (sorted[mid-1] + sorted[mid]) / 2
+}
+
+func medianFloat64(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[mid]
+	}
+	return (sorted[mid-1] + sorted[mid]) / 2
+}
+
+var compareColors = []string{"#3273dc", "#00a78e", "#f14668", "#ff9f1c"}
+
+// buildCompareChartJSON aligns each suburb's monthly series on a shared month
+// axis and returns Chart.js-ready JSON.
+func buildCompareChartJSON(items []SuburbComparison, monthly map[string][]database.GetSuburbMonthlyAveragesRow) template.JS {
+	monthSet := make(map[string]struct{})
+	for _, item := range items {
+		for _, point := range monthly[item.Key] {
+			monthSet[point.Month] = struct{}{}
+		}
+	}
+	labels := make([]string, 0, len(monthSet))
+	for month := range monthSet {
+		labels = append(labels, month)
+	}
+	sort.Strings(labels)
+
+	datasets := make([]map[string]any, 0, len(items))
+	for i, item := range items {
+		byMonth := make(map[string]int64, len(monthly[item.Key]))
+		for _, point := range monthly[item.Key] {
+			byMonth[point.Month] = point.AvgPrice
+		}
+		values := make([]any, len(labels))
+		for j, label := range labels {
+			if value, ok := byMonth[label]; ok {
+				values[j] = value
+			}
+		}
+		color := compareColors[i%len(compareColors)]
+		datasets = append(datasets, map[string]any{
+			"label":           item.Suburb + ", " + item.State,
+			"data":            values,
+			"borderColor":     color,
+			"backgroundColor": color,
+			"tension":         0.25,
+			"spanGaps":        false,
+			"pointRadius":     0,
+			"borderWidth":     2,
+		})
+	}
+
+	encoded, err := json.Marshal(map[string]any{"labels": labels, "datasets": datasets})
+	if err != nil {
+		log.Printf("Compare chart encoding error: %v", err)
+		return template.JS(`{"labels":[],"datasets":[]}`)
+	}
+	return template.JS(encoded)
 }
 
 // handleSuburbAnalytics renders suburb KPIs, monthly trends and paginated sales.
@@ -2196,23 +2508,329 @@ func (app *App) handleSuburbAnalytics(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if suburb == "" {
 		// The whole-market overview is read from the materialised
-		// suburb_stats table, so this is cheap even on a cold start.
-		// Rendering every suburb produces a ~10MB page on the full NSW PSI
-		// dataset. The query is ordered by sales volume, so only fetch the
-		// leaders; the window count keeps the true total for the notice.
-		const overviewLimit = 200
-		overview, err := app.queries.GetSuburbOverviewStats(ctx, overviewLimit)
+		// suburb_stats table, so this is cheap even on a cold start. Page it
+		// rather than silently truncating the long tail of suburbs.
+		overviewPage, _ := strconv.Atoi(r.URL.Query().Get("suburb_page"))
+		if overviewPage < 1 {
+			overviewPage = 1
+		}
+		total, err := app.queries.CountSuburbStats(ctx)
+		if err != nil {
+			log.Printf("Error counting suburb stats: %v", err)
+		}
+		totalPages := int((total + suburbOverviewPageSize - 1) / suburbOverviewPageSize)
+		if totalPages < 1 {
+			totalPages = 1
+		}
+		if overviewPage > totalPages {
+			overviewPage = totalPages
+		}
+		overview, err := app.queries.GetSuburbOverviewStats(ctx, database.GetSuburbOverviewStatsParams{
+			RowLimit:  suburbOverviewPageSize,
+			RowOffset: int64((overviewPage - 1) * suburbOverviewPageSize),
+		})
 		if err != nil {
 			log.Printf("Error fetching overview stats: %v", err)
 		}
-		data.OverviewTotal = len(overview)
-		if len(overview) > 0 {
-			data.OverviewTotal = int(overview[0].TotalCount)
-		}
 		data.OverviewStats = overview
+		data.OverviewTotal = int(total)
+		data.OverviewPage = overviewPage
+		data.OverviewTotalPages = totalPages
+		data.OverviewHasPrev = overviewPage > 1
+		data.OverviewHasNext = overviewPage < totalPages
+		data.OverviewPrevPage = overviewPage - 1
+		data.OverviewNextPage = overviewPage + 1
 	}
 
 	app.renderTemplate(w, "suburb.html", data)
+}
+
+// handleSuburbLossRanking lists suburbs with the most loss-making resales in
+// the materialised two-year ranking.
+func (app *App) handleSuburbLossRanking(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	sortValue := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("sort")))
+	switch sortValue {
+	case "rate", "average_loss":
+	default:
+		sortValue = "losses"
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+
+	const minResales int64 = 20
+	const minAverageLosses int64 = 10
+	queryMinResales := int64(0)
+	queryMinLosses := int64(0)
+	if sortValue == "rate" {
+		queryMinResales = minResales
+	}
+	if sortValue == "average_loss" {
+		queryMinLosses = minAverageLosses
+	}
+
+	data := PageData{
+		Title:                "Suburbs with the Most Losses - SoldNSW",
+		ActiveNav:            "losses",
+		Flash:                app.readFlash(w, r),
+		LossRankingSort:      sortValue,
+		LossRateMinResales:   minResales,
+		LossAverageMinLosses: minAverageLosses,
+	}
+	data.StatsStatus, data.StatsUpdated, _ = app.statsSnapshot()
+
+	summary, err := app.queries.GetSuburbLossStatsSummary(ctx)
+	if err != nil {
+		log.Printf("Suburb loss summary error: %v", err)
+		app.renderSearchErrorStatus(w, r, "most_losses.html", "Loss ranking unavailable - SoldNSW", "Loss statistics are temporarily unavailable. Please try again.", http.StatusServiceUnavailable)
+		return
+	}
+	data.SuburbLossSummary = summary
+
+	total, err := app.queries.CountSuburbLossStats(ctx, database.CountSuburbLossStatsParams{
+		Sort:       sortValue,
+		MinResales: queryMinResales,
+		MinLosses:  queryMinLosses,
+	})
+	if err != nil {
+		log.Printf("Suburb loss count error: %v", err)
+		app.renderSearchErrorStatus(w, r, "most_losses.html", "Loss ranking unavailable - SoldNSW", "Loss statistics are temporarily unavailable. Please try again.", http.StatusServiceUnavailable)
+		return
+	}
+	setSearchPagination(&data, page, total, suburbSalesPageSize)
+
+	rows, err := app.queries.ListSuburbLossStats(ctx, database.ListSuburbLossStatsParams{
+		Sort:       sortValue,
+		MinResales: queryMinResales,
+		MinLosses:  queryMinLosses,
+		RowOffset:  int64((data.Page - 1) * suburbSalesPageSize),
+		RowLimit:   suburbSalesPageSize,
+	})
+	if err != nil {
+		log.Printf("Suburb loss list error: %v", err)
+		app.renderSearchErrorStatus(w, r, "most_losses.html", "Loss ranking unavailable - SoldNSW", "Loss statistics are temporarily unavailable. Please try again.", http.StatusServiceUnavailable)
+		return
+	}
+	ranked := make([]suburbLossRankRow, len(rows))
+	for i, row := range rows {
+		ranked[i] = suburbLossRankRow{
+			ListSuburbLossStatsRow: row,
+			Rank:                   (data.Page-1)*suburbSalesPageSize + i + 1,
+		}
+	}
+	data.SuburbLossStats = ranked
+
+	pagerValues := url.Values{}
+	if sortValue != "losses" {
+		pagerValues.Set("sort", sortValue)
+	}
+	data.PagerBaseURL = pagerBaseURL("/suburbs/most-losses", pagerValues)
+	data.PagerAnchor = "#rankings"
+	app.renderTemplate(w, "most_losses.html", data)
+}
+
+// handleSuburbGrowth ranks suburbs by average sale price change over the
+// selected 1, 5 or 10-year window.
+func (app *App) handleSuburbGrowth(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	rangeValue := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("range")))
+	if rangeValue != "1" && rangeValue != "5" && rangeValue != "10" {
+		rangeValue = "5"
+	}
+	direction := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("direction")))
+	if direction != "bottom" {
+		direction = "top"
+	}
+	minSales, _ := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get("min_sales")), 10, 64)
+	if minSales <= 0 {
+		minSales = growthMinSalesDefault
+	}
+	if minSales > growthMinSalesMax {
+		minSales = growthMinSalesMax
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+
+	data := PageData{
+		Title:           "Fastest Growing Suburbs - SoldNSW",
+		ActiveNav:       "analytics",
+		Flash:           app.readFlash(w, r),
+		GrowthRange:     rangeValue,
+		GrowthDirection: direction,
+		GrowthMinSales:  minSales,
+	}
+	data.StatsStatus, data.StatsUpdated, _ = app.statsSnapshot()
+
+	summary, err := app.queries.GetSuburbGrowthSummary(ctx, database.GetSuburbGrowthSummaryParams{
+		Range:    rangeValue,
+		MinSales: minSales,
+	})
+	if err != nil {
+		log.Printf("Suburb growth summary error: %v", err)
+		app.renderSearchErrorStatus(w, r, "growth.html", "Growth ranking unavailable - SoldNSW", "Suburb growth statistics are temporarily unavailable. Please try again.", http.StatusServiceUnavailable)
+		return
+	}
+	data.GrowthSummary = summary
+	setSearchPagination(&data, page, summary.Suburbs, suburbSalesPageSize)
+
+	rows, err := app.queries.ListSuburbGrowth(ctx, database.ListSuburbGrowthParams{
+		Range:     rangeValue,
+		Direction: direction,
+		MinSales:  minSales,
+		RowOffset: int64((data.Page - 1) * suburbSalesPageSize),
+		RowLimit:  suburbSalesPageSize,
+	})
+	if err != nil {
+		log.Printf("Suburb growth list error: %v", err)
+		app.renderSearchErrorStatus(w, r, "growth.html", "Growth ranking unavailable - SoldNSW", "Suburb growth statistics are temporarily unavailable. Please try again.", http.StatusServiceUnavailable)
+		return
+	}
+	ranked := make([]suburbGrowthRow, len(rows))
+	for i, row := range rows {
+		ranked[i] = suburbGrowthRow{
+			ListSuburbGrowthRow: row,
+			Rank:                (data.Page-1)*suburbSalesPageSize + i + 1,
+		}
+	}
+	data.GrowthRows = ranked
+
+	pagerValues := url.Values{}
+	pagerValues.Set("range", rangeValue)
+	pagerValues.Set("direction", direction)
+	pagerValues.Set("min_sales", strconv.FormatInt(minSales, 10))
+	data.PagerBaseURL = pagerBaseURL("/suburbs/growth", pagerValues)
+	data.PagerAnchor = "#rankings"
+	app.renderTemplate(w, "growth.html", data)
+}
+
+// handleSuburbCompare renders side-by-side suburb KPIs and an overlaid monthly
+// average-price chart. Suburbs may be supplied as "SUBURB", "SUBURB|STATE",
+// or a comma-separated mix of both.
+func (app *App) handleSuburbCompare(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	raw := strings.TrimSpace(r.URL.Query().Get("suburbs"))
+	rangeValue := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("range")))
+	switch rangeValue {
+	case "1", "5", "10", "all":
+	default:
+		rangeValue = "10"
+	}
+
+	data := PageData{
+		Title:        "Compare Suburbs - SoldNSW",
+		ActiveNav:    "analytics",
+		Flash:        app.readFlash(w, r),
+		CompareRaw:   raw,
+		CompareRange: rangeValue,
+	}
+	data.StatsStatus, data.StatsUpdated, _ = app.statsSnapshot()
+
+	cutoff := lossCutoff(rangeValue)
+	chartCutoff := ""
+	if rangeValue != "all" {
+		if years, err := strconv.Atoi(rangeValue); err == nil {
+			chartCutoff = time.Now().AddDate(-years, 0, 0).Format("2006-01")
+		}
+	}
+
+	var selections [][2]string
+	seen := make(map[string]bool)
+	for _, token := range strings.Split(raw, ",") {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		suburb := strings.ToUpper(token)
+		state := ""
+		if i := strings.LastIndex(suburb, "|"); i >= 0 {
+			state = strings.ToUpper(strings.TrimSpace(suburb[i+1:]))
+			suburb = strings.TrimSpace(suburb[:i])
+		}
+		if suburb == "" {
+			continue
+		}
+		if state == "" {
+			detected, err := database.SuburbStateByName(ctx, app.db, suburb)
+			if err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					log.Printf("Error resolving comparison state for %s: %v", suburb, err)
+				}
+				data.CompareMissing = append(data.CompareMissing, token)
+				continue
+			}
+			state = detected
+		}
+		key := suburb + "|" + state
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if len(selections) >= maxCompareSuburbs {
+			data.CompareLimitReached = true
+			continue
+		}
+		selections = append(selections, [2]string{suburb, state})
+	}
+
+	monthlyBySuburb := make(map[string][]database.GetSuburbMonthlyAveragesRow, len(selections))
+	for _, selection := range selections {
+		suburb, state := selection[0], selection[1]
+		key := suburb + "|" + state
+		stats, err := app.queries.GetSuburbStats(ctx, database.GetSuburbStatsParams{
+			Suburb: suburb,
+			State:  state,
+		})
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				data.CompareMissing = append(data.CompareMissing, suburb+"|"+state)
+			} else {
+				log.Printf("Error fetching comparison stats for %s: %v", key, err)
+			}
+			continue
+		}
+
+		var analytics database.GetSuburbAnalyticsRow
+		analyticsRows, err := app.queries.GetSuburbAnalytics(ctx, database.GetSuburbAnalyticsParams{
+			Suburb: suburb,
+			State:  state,
+			Cutoff: cutoff,
+		})
+		if err != nil {
+			log.Printf("Error fetching comparison analytics for %s: %v", key, err)
+		} else if len(analyticsRows) > 0 {
+			analytics = analyticsRows[0]
+		}
+
+		monthly, err := app.queries.GetSuburbMonthlyAverages(ctx, database.GetSuburbMonthlyAveragesParams{
+			Suburb: suburb,
+			State:  state,
+			Cutoff: chartCutoff,
+		})
+		if err != nil {
+			log.Printf("Error fetching comparison monthly series for %s: %v", key, err)
+		}
+		monthlyBySuburb[key] = monthly
+
+		data.CompareSuburbs = append(data.CompareSuburbs, SuburbComparison{
+			Key:               key,
+			Suburb:            stats.Suburb,
+			State:             stats.State,
+			PropertyCount:     stats.PropertyCount,
+			SalesCount:        stats.SalesCount,
+			AvgPrice:          stats.AvgPrice,
+			RangeAvgPrice:     priceToInt(analytics.AvgPrice),
+			MedianPrice:       analytics.MedianPrice,
+			MedianPricePerSqm: analytics.MedianPricePerSqm,
+			RangeSales:        analytics.TotalSales,
+			SqmSampleCount:    analytics.SqmSampleCount,
+			Change1y:          stats.Change1y,
+			Change5y:          stats.Change5y,
+			Change10y:         stats.Change10y,
+			UpdatedAt:         stats.UpdatedAt,
+		})
+	}
+	if len(data.CompareSuburbs) > 0 {
+		data.CompareChartJSON = buildCompareChartJSON(data.CompareSuburbs, monthlyBySuburb)
+	}
+	app.renderTemplate(w, "compare.html", data)
 }
 
 // handleSuburbLosses lists properties whose latest recorded sale was below
@@ -2229,7 +2847,7 @@ func (app *App) handleSuburbLosses(w http.ResponseWriter, r *http.Request) {
 		suburb = strings.TrimSpace(suburb[:i])
 	}
 	if suburb == "" {
-		http.Redirect(w, r, "/suburbs", http.StatusSeeOther)
+		http.Redirect(w, r, "/suburbs/most-losses", http.StatusSeeOther)
 		return
 	}
 	if state == "" {
@@ -2260,7 +2878,7 @@ func (app *App) handleSuburbLosses(w http.ResponseWriter, r *http.Request) {
 
 	data := PageData{
 		Title:          "Properties sold at a loss - SoldNSW",
-		ActiveNav:      "analytics",
+		ActiveNav:      "losses",
 		SelectedSuburb: suburb,
 		SelectedState:  state,
 		LossRange:      rangeValue,
@@ -2288,16 +2906,19 @@ func (app *App) handleSuburbLosses(w http.ResponseWriter, r *http.Request) {
 	// the filtered total can be derived from them instead of re-running the
 	// same resale window query two more times.
 	summary := database.GetSuburbLossSummaryRow{}
+	var weightedLossPercent float64
 	for _, row := range typeRows {
 		summary.Resales += row.Resales
 		summary.Losses += row.Losses
 		summary.TotalLoss += row.TotalLoss
+		weightedLossPercent += row.AverageLossPercent * float64(row.Losses)
 		if row.LargestLoss < summary.LargestLoss {
 			summary.LargestLoss = row.LargestLoss
 		}
 	}
 	if summary.Losses > 0 {
 		summary.AverageLoss = summary.TotalLoss / summary.Losses
+		summary.AverageLossPercent = weightedLossPercent / float64(summary.Losses)
 	}
 	data.LossSummary = &summary
 	if summary.Resales > 0 {
@@ -2466,7 +3087,7 @@ func (app *App) handleSubmitAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !app.limiter.allow(clientIP(r)) {
+	if !app.limiter.allow(app.clientIP(r)) {
 		app.renderSubmitError(w, r, http.StatusTooManyRequests, gnafPID, settleDate, "Too many submissions. Please wait a minute and try again.")
 		return
 	}
@@ -2556,6 +3177,9 @@ func (app *App) handleSubmitAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := database.RefreshSuburbStat(ctx, app.db, prop.Suburb, prop.State); err != nil {
 		log.Printf("Could not refresh suburb statistics: %v", err)
+	}
+	if err := database.RefreshSuburbLossStat(ctx, app.db, prop.Suburb, prop.State); err != nil {
+		log.Printf("Could not refresh suburb loss statistics: %v", err)
 	}
 	if err := database.RefreshStreetStat(ctx, app.db, prop.StreetName, prop.StreetType, prop.Suburb, prop.State, prop.Postcode); err != nil {
 		log.Printf("Could not refresh street statistics: %v", err)
@@ -2771,12 +3395,97 @@ func (l *ipRateLimiter) allow(ip string) bool {
 	return true
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+// ipTrustList is the set of proxy addresses whose X-Forwarded-For header is
+// trusted.
+type ipTrustList struct {
+	nets []*net.IPNet
+}
+
+func parseTrustedProxies(value string) (*ipTrustList, error) {
+	var nets []*net.IPNet
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "/") {
+			_, network, err := net.ParseCIDR(part)
+			if err != nil {
+				return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", part, err)
+			}
+			nets = append(nets, network)
+			continue
+		}
+		ip := net.ParseIP(part)
+		if ip == nil {
+			return nil, fmt.Errorf("invalid trusted proxy %q", part)
+		}
+		bits := 128
+		if v4 := ip.To4(); v4 != nil {
+			ip = v4
+			bits = 32
+		}
+		nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+	}
+	if len(nets) == 0 {
+		return nil, nil
+	}
+	return &ipTrustList{nets: nets}, nil
+}
+
+func (l *ipTrustList) contains(ip net.IP) bool {
+	if l == nil || ip == nil {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	for _, network := range l.nets {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return remoteAddr
 	}
 	return host
+}
+
+// clientIP returns the caller address. X-Forwarded-For is only honoured when
+// the immediate peer is a configured trusted proxy, and trusted hops are
+// skipped from the right so a client cannot spoof an address by prepending one.
+func (app *App) clientIP(r *http.Request) string {
+	remote := remoteIP(r.RemoteAddr)
+	if app.trustedProxies == nil || !app.trustedProxies.contains(net.ParseIP(remote)) {
+		return remote
+	}
+	header := r.Header.Get("X-Forwarded-For")
+	if header == "" {
+		return remote
+	}
+	parts := strings.Split(header, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		ip := net.ParseIP(strings.TrimSpace(parts[i]))
+		if ip == nil {
+			continue
+		}
+		if !app.trustedProxies.contains(ip) {
+			return ip.String()
+		}
+	}
+	// Every hop was trusted; fall back to the leftmost valid address, then the
+	// immediate peer.
+	for _, part := range parts {
+		if ip := net.ParseIP(strings.TrimSpace(part)); ip != nil {
+			return ip.String()
+		}
+	}
+	return remote
 }
 
 func withSecurityHeaders(next http.Handler) http.Handler {
@@ -2788,10 +3497,43 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// loggingResponseWriter captures the response status and size for the access
+// log without changing the handler's view of the response writer.
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int64
+}
+
+func (w *loggingResponseWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *loggingResponseWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += int64(n)
+	return n, err
+}
+
+func (w *loggingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func withRequestLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s", r.Method, r.URL.RequestURI(), time.Since(start).Round(time.Millisecond))
+		lw := &loggingResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(lw, r)
+		status := lw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		log.Printf("%s %s %d %dB %s", r.Method, r.URL.RequestURI(), status, lw.bytes, time.Since(start).Round(time.Millisecond))
 	})
 }

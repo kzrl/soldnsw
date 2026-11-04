@@ -273,19 +273,20 @@ been measured in this workspace.
 
 ### 5.2 Trusted proxy and rate limiting (P1, S)
 
-- [ ] Add a trusted-proxy configuration; only honour `X-Forwarded-For` from
-  trusted hops.
+- [x] Add a trusted-proxy configuration; only honour `X-Forwarded-For` from
+  trusted hops. Configured with `-trusted-proxies` / `TRUSTED_PROXIES`.
 - [ ] Rate-limit search and suggestion endpoints separately from submissions.
 - [ ] Use a shared store for rate limits if running multiple instances.
-- [ ] Add tests for forwarded headers and limiter boundaries.
+- [x] Add tests for forwarded headers.
+- [ ] Add limiter boundary tests.
 
 ### 5.3 Health and observability (P1, S)
 
-- [ ] Add `GET /healthz` (process alive).
-- [ ] Add `GET /readyz` (DB reachable, schema/indexes/stats ready).
-- [ ] Log method, path, status, duration and response size.
+- [x] Add `GET /healthz` (process alive).
+- [x] Add `GET /readyz` (DB reachable, schema/indexes/stats ready).
+- [x] Log method, path, status, duration and response size.
 - [ ] Add counters/timers for search modes, DB errors and slow queries.
-- [ ] Expose build version/commit for deployments.
+- [x] Expose build version/commit for deployments.
 
 ### 5.4 URL escaping (P2, S)
 
@@ -321,8 +322,12 @@ been measured in this workspace.
 
 ### 6.4 Comparable-sales and nearby properties (P2, L)
 
-- [ ] Add same-street/nearby recent sales to property pages.
-- [ ] Add a “recently sold nearby” section once coordinates are available.
+- [x] Add same-suburb comparable sales to property pages (same street first,
+  then similar land area), with median price and median land value per m².
+  No coordinates are required for this first version.
+- [ ] Add true "recently sold nearby" distance ranking once coordinates are
+  available.
+- [ ] Add a same-street/nearby map layer.
 
 ---
 

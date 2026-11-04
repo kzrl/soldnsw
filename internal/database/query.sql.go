@@ -156,6 +156,39 @@ func (q *Queries) CountStreetStatsGroups(ctx context.Context, arg CountStreetSta
 	return count, err
 }
 
+const countSuburbLossStats = `-- name: CountSuburbLossStats :one
+SELECT COUNT(*)
+FROM suburb_loss_stats
+WHERE period = '2y'
+  AND losses > 0
+  AND (CAST(?1 AS TEXT) <> 'rate' OR resales >= CAST(?2 AS INTEGER))
+  AND (CAST(?1 AS TEXT) <> 'average_loss' OR losses >= CAST(?3 AS INTEGER))
+`
+
+type CountSuburbLossStatsParams struct {
+	Sort       string
+	MinResales int64
+	MinLosses  int64
+}
+
+func (q *Queries) CountSuburbLossStats(ctx context.Context, arg CountSuburbLossStatsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSuburbLossStats, arg.Sort, arg.MinResales, arg.MinLosses)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSuburbStats = `-- name: CountSuburbStats :one
+SELECT COUNT(*) FROM suburb_stats
+`
+
+func (q *Queries) CountSuburbStats(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSuburbStats)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getBuildingUnitsByBasePID = `-- name: GetBuildingUnitsByBasePID :many
 SELECT
     p.gnaf_pid,
@@ -329,8 +362,13 @@ WITH props AS (
       AND (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
 ),
 sales AS (
-    SELECT cs.sale_price, cs.settlement_date
+    SELECT
+        cs.sale_price,
+        cs.settlement_date,
+        p.land_area,
+        p.dwelling_type
     FROM canonical_sales cs
+    JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
     WHERE cs.postcode = ?1
 ),
 filtered AS (
@@ -345,6 +383,22 @@ med AS (
         WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN sale_price
     END) AS median_price
     FROM filtered
+),
+ppm AS (
+    SELECT
+        sale_price * 1.0 / land_area AS price_per_sqm,
+        ROW_NUMBER() OVER (ORDER BY sale_price * 1.0 / land_area) AS rn,
+        COUNT(*) OVER () AS cnt
+    FROM sales
+    WHERE land_area > 0 AND dwelling_type = 'house'
+),
+ppm_med AS (
+    SELECT
+        AVG(CASE
+            WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN price_per_sqm
+        END) AS median_price_per_sqm,
+        MAX(cnt) AS sample_count
+    FROM ppm
 )
 SELECT
     (SELECT COUNT(*) FROM props) AS property_count,
@@ -354,19 +408,24 @@ SELECT
     CAST(COALESCE((SELECT MAX(sale_price) FROM sales), 0) AS INTEGER) AS max_price,
     CAST(COALESCE((SELECT MIN(sale_price) FROM sales), 0) AS INTEGER) AS min_price,
     CAST(COALESCE((SELECT MAX(settlement_date) FROM sales), '') AS TEXT) AS latest_sale_date,
-    (SELECT COUNT(*) FROM (SELECT DISTINCT suburb, state FROM props)) AS suburb_count
+    (SELECT COUNT(*) FROM (SELECT DISTINCT suburb, state FROM props)) AS suburb_count,
+    CAST(COALESCE(ppm_med.median_price_per_sqm, 0) AS INTEGER) AS median_price_per_sqm,
+    CAST(COALESCE(ppm_med.sample_count, 0) AS INTEGER) AS sqm_sample_count
 FROM med
+CROSS JOIN ppm_med
 `
 
 type GetPostcodeSummaryRow struct {
-	PropertyCount  int64
-	SalesCount     int64
-	AvgPrice       int64
-	MedianPrice    int64
-	MaxPrice       int64
-	MinPrice       int64
-	LatestSaleDate string
-	SuburbCount    int64
+	PropertyCount     int64
+	SalesCount        int64
+	AvgPrice          int64
+	MedianPrice       int64
+	MaxPrice          int64
+	MinPrice          int64
+	LatestSaleDate    string
+	SuburbCount       int64
+	MedianPricePerSqm int64
+	SqmSampleCount    int64
 }
 
 func (q *Queries) GetPostcodeSummary(ctx context.Context, postcode string) (GetPostcodeSummaryRow, error) {
@@ -381,6 +440,8 @@ func (q *Queries) GetPostcodeSummary(ctx context.Context, postcode string) (GetP
 		&i.MinPrice,
 		&i.LatestSaleDate,
 		&i.SuburbCount,
+		&i.MedianPricePerSqm,
+		&i.SqmSampleCount,
 	)
 	return i, err
 }
@@ -444,6 +505,129 @@ func (q *Queries) GetPropertyByPID(ctx context.Context, gnafPid string) (GnafPro
 		&i.DwellingType,
 	)
 	return i, err
+}
+
+const getPropertyComparables = `-- name: GetPropertyComparables :many
+WITH subject AS (
+    SELECT
+        p.gnaf_pid,
+        p.suburb,
+        p.state,
+        p.street_name,
+        p.street_type,
+        p.dwelling_type,
+        p.land_area
+    FROM gnaf_properties p
+    WHERE p.gnaf_pid = ?2
+),
+latest AS (
+    SELECT
+        cs.canonical_pid,
+        cs.sale_id,
+        cs.settlement_date,
+        cs.sale_price,
+        cs.source_type,
+        ROW_NUMBER() OVER (
+            PARTITION BY cs.canonical_pid
+            ORDER BY cs.settlement_date DESC, cs.sale_id DESC
+        ) AS rn
+    FROM canonical_sales cs
+    JOIN subject s ON s.suburb = cs.suburb AND s.state = cs.state
+    WHERE cs.canonical_pid <> s.gnaf_pid
+      AND cs.settlement_date >= ?3
+)
+SELECT
+    l.canonical_pid AS gnaf_pid,
+    p.street_number,
+    p.street_name,
+    p.street_type,
+    p.suburb,
+    p.state,
+    p.postcode,
+    p.dwelling_type,
+    p.land_area,
+    l.settlement_date,
+    l.sale_price,
+    l.source_type,
+    CAST(CASE WHEN p.land_area > 0 THEN l.sale_price / p.land_area ELSE 0 END AS INTEGER) AS price_per_sqm,
+    CASE WHEN p.street_name = s.street_name AND p.street_type = s.street_type THEN 1 ELSE 0 END AS same_street
+FROM latest l
+JOIN gnaf_properties p ON p.gnaf_pid = l.canonical_pid
+CROSS JOIN subject s
+WHERE l.rn = 1
+  AND (
+      s.dwelling_type IN ('', 'unknown')
+      OR p.dwelling_type = s.dwelling_type
+      OR (s.dwelling_type = 'other' AND p.dwelling_type = 'unknown')
+  )
+ORDER BY
+    same_street DESC,
+    CASE WHEN s.land_area > 0 AND p.land_area > 0
+         THEN ABS(p.land_area - s.land_area) END ASC,
+    l.settlement_date DESC,
+    l.sale_id DESC
+LIMIT ?1
+`
+
+type GetPropertyComparablesParams struct {
+	RowLimit int64
+	Pid      string
+	Cutoff   string
+}
+
+type GetPropertyComparablesRow struct {
+	GnafPid        string
+	StreetNumber   sql.NullString
+	StreetName     string
+	StreetType     string
+	Suburb         string
+	State          string
+	Postcode       string
+	DwellingType   string
+	LandArea       sql.NullFloat64
+	SettlementDate string
+	SalePrice      int64
+	SourceType     string
+	PricePerSqm    int64
+	SameStreet     int64
+}
+
+func (q *Queries) GetPropertyComparables(ctx context.Context, arg GetPropertyComparablesParams) ([]GetPropertyComparablesRow, error) {
+	rows, err := q.db.QueryContext(ctx, getPropertyComparables, arg.RowLimit, arg.Pid, arg.Cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetPropertyComparablesRow
+	for rows.Next() {
+		var i GetPropertyComparablesRow
+		if err := rows.Scan(
+			&i.GnafPid,
+			&i.StreetNumber,
+			&i.StreetName,
+			&i.StreetType,
+			&i.Suburb,
+			&i.State,
+			&i.Postcode,
+			&i.DwellingType,
+			&i.LandArea,
+			&i.SettlementDate,
+			&i.SalePrice,
+			&i.SourceType,
+			&i.PricePerSqm,
+			&i.SameStreet,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getSalesHistoryByCanonical = `-- name: GetSalesHistoryByCanonical :many
@@ -532,9 +716,14 @@ WITH props AS (
       AND p.postcode = ?5
 ),
 sales AS (
-    SELECT cs.sale_price, cs.settlement_date
+    SELECT
+        cs.sale_price,
+        cs.settlement_date,
+        p.land_area,
+        p.dwelling_type
     FROM canonical_sales cs
     JOIN props pr ON pr.gnaf_pid = cs.canonical_pid
+    JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
 ),
 filtered AS (
     SELECT
@@ -548,6 +737,22 @@ med AS (
         WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN sale_price
     END) AS median_price
     FROM filtered
+),
+ppm AS (
+    SELECT
+        sale_price * 1.0 / land_area AS price_per_sqm,
+        ROW_NUMBER() OVER (ORDER BY sale_price * 1.0 / land_area) AS rn,
+        COUNT(*) OVER () AS cnt
+    FROM sales
+    WHERE land_area > 0 AND dwelling_type = 'house'
+),
+ppm_med AS (
+    SELECT
+        AVG(CASE
+            WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN price_per_sqm
+        END) AS median_price_per_sqm,
+        MAX(cnt) AS sample_count
+    FROM ppm
 )
 SELECT
     (SELECT COUNT(*) FROM props) AS property_count,
@@ -556,8 +761,11 @@ SELECT
     CAST(COALESCE(med.median_price, 0) AS INTEGER) AS median_price,
     CAST(COALESCE((SELECT MAX(sale_price) FROM sales), 0) AS INTEGER) AS max_price,
     CAST(COALESCE((SELECT MIN(sale_price) FROM sales), 0) AS INTEGER) AS min_price,
-    CAST(COALESCE((SELECT MAX(settlement_date) FROM sales), '') AS TEXT) AS latest_sale_date
+    CAST(COALESCE((SELECT MAX(settlement_date) FROM sales), '') AS TEXT) AS latest_sale_date,
+    CAST(COALESCE(ppm_med.median_price_per_sqm, 0) AS INTEGER) AS median_price_per_sqm,
+    CAST(COALESCE(ppm_med.sample_count, 0) AS INTEGER) AS sqm_sample_count
 FROM med
+CROSS JOIN ppm_med
 `
 
 type GetStreetSummaryParams struct {
@@ -569,13 +777,15 @@ type GetStreetSummaryParams struct {
 }
 
 type GetStreetSummaryRow struct {
-	PropertyCount  int64
-	SalesCount     int64
-	AvgPrice       int64
-	MedianPrice    int64
-	MaxPrice       int64
-	MinPrice       int64
-	LatestSaleDate string
+	PropertyCount     int64
+	SalesCount        int64
+	AvgPrice          int64
+	MedianPrice       int64
+	MaxPrice          int64
+	MinPrice          int64
+	LatestSaleDate    string
+	MedianPricePerSqm int64
+	SqmSampleCount    int64
 }
 
 func (q *Queries) GetStreetSummary(ctx context.Context, arg GetStreetSummaryParams) (GetStreetSummaryRow, error) {
@@ -595,6 +805,8 @@ func (q *Queries) GetStreetSummary(ctx context.Context, arg GetStreetSummaryPara
 		&i.MaxPrice,
 		&i.MinPrice,
 		&i.LatestSaleDate,
+		&i.MedianPricePerSqm,
+		&i.SqmSampleCount,
 	)
 	return i, err
 }
@@ -603,9 +815,12 @@ const getSuburbAnalytics = `-- name: GetSuburbAnalytics :many
 WITH filtered AS (
     SELECT
         cs.sale_price,
+        p.land_area,
+        p.dwelling_type,
         ROW_NUMBER() OVER (ORDER BY cs.sale_price) AS rn,
         COUNT(*) OVER () AS cnt
     FROM canonical_sales cs
+    JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
     WHERE cs.suburb = UPPER(?1) AND cs.state = UPPER(?2)
       AND cs.settlement_date >= ?3
 ),
@@ -614,6 +829,23 @@ med AS (
         WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN sale_price
     END) AS median_price
     FROM filtered
+),
+ppm AS (
+    SELECT
+        sale_price * 1.0 / land_area AS price_per_sqm,
+        ROW_NUMBER() OVER (ORDER BY sale_price * 1.0 / land_area) AS rn,
+        COUNT(*) OVER () AS cnt
+    FROM filtered
+    WHERE land_area > 0 AND dwelling_type = 'house'
+),
+ppm_med AS (
+    SELECT
+        AVG(CASE
+            WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN price_per_sqm
+        END) AS median_price_per_sqm,
+        AVG(price_per_sqm) AS avg_price_per_sqm,
+        MAX(cnt) AS sample_count
+    FROM ppm
 )
 SELECT
     UPPER(?1) AS suburb,
@@ -621,9 +853,13 @@ SELECT
     AVG(f.sale_price) AS avg_price,
     CAST(COALESCE(med.median_price, 0) AS INTEGER) AS median_price,
     CAST(COALESCE(MAX(f.sale_price), 0) AS INTEGER) AS max_price,
-    CAST(COALESCE(MIN(f.sale_price), 0) AS INTEGER) AS min_price
+    CAST(COALESCE(MIN(f.sale_price), 0) AS INTEGER) AS min_price,
+    CAST(COALESCE(ppm_med.median_price_per_sqm, 0) AS INTEGER) AS median_price_per_sqm,
+    CAST(COALESCE(ppm_med.avg_price_per_sqm, 0) AS INTEGER) AS avg_price_per_sqm,
+    CAST(COALESCE(ppm_med.sample_count, 0) AS INTEGER) AS sqm_sample_count
 FROM filtered f
 CROSS JOIN med
+CROSS JOIN ppm_med
 `
 
 type GetSuburbAnalyticsParams struct {
@@ -633,12 +869,15 @@ type GetSuburbAnalyticsParams struct {
 }
 
 type GetSuburbAnalyticsRow struct {
-	Suburb      string
-	TotalSales  int64
-	AvgPrice    sql.NullFloat64
-	MedianPrice int64
-	MaxPrice    int64
-	MinPrice    int64
+	Suburb            string
+	TotalSales        int64
+	AvgPrice          sql.NullFloat64
+	MedianPrice       int64
+	MaxPrice          int64
+	MinPrice          int64
+	MedianPricePerSqm int64
+	AvgPricePerSqm    int64
+	SqmSampleCount    int64
 }
 
 func (q *Queries) GetSuburbAnalytics(ctx context.Context, arg GetSuburbAnalyticsParams) ([]GetSuburbAnalyticsRow, error) {
@@ -657,6 +896,9 @@ func (q *Queries) GetSuburbAnalytics(ctx context.Context, arg GetSuburbAnalytics
 			&i.MedianPrice,
 			&i.MaxPrice,
 			&i.MinPrice,
+			&i.MedianPricePerSqm,
+			&i.AvgPricePerSqm,
+			&i.SqmSampleCount,
 		); err != nil {
 			return nil, err
 		}
@@ -746,6 +988,92 @@ func (q *Queries) GetSuburbExtremeSales(ctx context.Context, arg GetSuburbExtrem
 	return items, nil
 }
 
+const getSuburbGrowthSummary = `-- name: GetSuburbGrowthSummary :one
+WITH filtered AS (
+    SELECT
+        s.updated_at,
+        CAST(CASE p.range_key
+            WHEN '1' THEN s.change_1y
+            WHEN '5' THEN s.change_5y
+            ELSE s.change_10y
+        END AS REAL) AS change_pct
+    FROM suburb_stats s
+    CROSS JOIN (SELECT CAST(?1 AS TEXT) AS range_key) p
+    WHERE s.sales_count >= CAST(?2 AS INTEGER)
+)
+SELECT
+    CAST(COUNT(CASE WHEN change_pct IS NOT NULL THEN 1 END) AS INTEGER) AS suburbs,
+    CAST(COALESCE(AVG(change_pct), 0) AS REAL) AS average_change,
+    CAST(COUNT(CASE WHEN change_pct > 0 THEN 1 END) AS INTEGER) AS rising,
+    CAST(COUNT(CASE WHEN change_pct < 0 THEN 1 END) AS INTEGER) AS falling,
+    CAST(COALESCE(MAX(updated_at), '') AS TEXT) AS updated_at
+FROM filtered
+`
+
+type GetSuburbGrowthSummaryParams struct {
+	Range    string
+	MinSales int64
+}
+
+type GetSuburbGrowthSummaryRow struct {
+	Suburbs       int64
+	AverageChange float64
+	Rising        int64
+	Falling       int64
+	UpdatedAt     string
+}
+
+func (q *Queries) GetSuburbGrowthSummary(ctx context.Context, arg GetSuburbGrowthSummaryParams) (GetSuburbGrowthSummaryRow, error) {
+	row := q.db.QueryRowContext(ctx, getSuburbGrowthSummary, arg.Range, arg.MinSales)
+	var i GetSuburbGrowthSummaryRow
+	err := row.Scan(
+		&i.Suburbs,
+		&i.AverageChange,
+		&i.Rising,
+		&i.Falling,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSuburbLossStatsSummary = `-- name: GetSuburbLossStatsSummary :one
+SELECT
+    CAST(COUNT(CASE WHEN losses > 0 THEN 1 END) AS INTEGER) AS suburbs_affected,
+    CAST(COALESCE(SUM(resales), 0) AS INTEGER) AS resales,
+    CAST(COALESCE(SUM(losses), 0) AS INTEGER) AS losses,
+    CAST(COALESCE(SUM(total_loss), 0) AS INTEGER) AS total_loss,
+    CAST(COALESCE(SUM(average_loss_percent * losses) / NULLIF(SUM(losses), 0), 0) AS REAL) AS average_loss_percent,
+    CAST(COALESCE(SUM(flagged_losses), 0) AS INTEGER) AS flagged_losses,
+    CAST(COALESCE(MAX(updated_at), '') AS TEXT) AS updated_at
+FROM suburb_loss_stats
+WHERE period = '2y'
+`
+
+type GetSuburbLossStatsSummaryRow struct {
+	SuburbsAffected    int64
+	Resales            int64
+	Losses             int64
+	TotalLoss          int64
+	AverageLossPercent float64
+	FlaggedLosses      int64
+	UpdatedAt          string
+}
+
+func (q *Queries) GetSuburbLossStatsSummary(ctx context.Context) (GetSuburbLossStatsSummaryRow, error) {
+	row := q.db.QueryRowContext(ctx, getSuburbLossStatsSummary)
+	var i GetSuburbLossStatsSummaryRow
+	err := row.Scan(
+		&i.SuburbsAffected,
+		&i.Resales,
+		&i.Losses,
+		&i.TotalLoss,
+		&i.AverageLossPercent,
+		&i.FlaggedLosses,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getSuburbLossSummary = `-- name: GetSuburbLossSummary :one
 WITH base AS (
     SELECT
@@ -800,6 +1128,11 @@ SELECT
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN sale_price - previous_price
     END), 0) AS INTEGER) AS average_loss,
+    CAST(COALESCE(AVG(CASE
+        WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
+             AND sale_price < previous_price AND settlement_date >= ?1
+        THEN (previous_price - sale_price) * 100.0 / NULLIF(previous_price, 0)
+    END), 0) AS REAL) AS average_loss_percent,
     CAST(COALESCE(MIN(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= ?1
@@ -815,11 +1148,12 @@ type GetSuburbLossSummaryParams struct {
 }
 
 type GetSuburbLossSummaryRow struct {
-	Resales     int64
-	Losses      int64
-	TotalLoss   int64
-	AverageLoss int64
-	LargestLoss int64
+	Resales            int64
+	Losses             int64
+	TotalLoss          int64
+	AverageLoss        int64
+	AverageLossPercent float64
+	LargestLoss        int64
 }
 
 func (q *Queries) GetSuburbLossSummary(ctx context.Context, arg GetSuburbLossSummaryParams) (GetSuburbLossSummaryRow, error) {
@@ -830,6 +1164,7 @@ func (q *Queries) GetSuburbLossSummary(ctx context.Context, arg GetSuburbLossSum
 		&i.Losses,
 		&i.TotalLoss,
 		&i.AverageLoss,
+		&i.AverageLossPercent,
 		&i.LargestLoss,
 	)
 	return i, err
@@ -883,6 +1218,11 @@ SELECT
              AND sale_price < previous_price AND settlement_date >= ?1
         THEN sale_price - previous_price
     END), 0) AS INTEGER) AS average_loss,
+    CAST(COALESCE(AVG(CASE
+        WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
+             AND sale_price < previous_price AND settlement_date >= ?1
+        THEN (previous_price - sale_price) * 100.0 / NULLIF(previous_price, 0)
+    END), 0) AS REAL) AS average_loss_percent,
     CAST(COALESCE(MIN(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= ?1
@@ -899,12 +1239,13 @@ type GetSuburbLossTypeSummaryParams struct {
 }
 
 type GetSuburbLossTypeSummaryRow struct {
-	DwellingType string
-	Resales      int64
-	Losses       int64
-	TotalLoss    int64
-	AverageLoss  int64
-	LargestLoss  int64
+	DwellingType       string
+	Resales            int64
+	Losses             int64
+	TotalLoss          int64
+	AverageLoss        int64
+	AverageLossPercent float64
+	LargestLoss        int64
 }
 
 func (q *Queries) GetSuburbLossTypeSummary(ctx context.Context, arg GetSuburbLossTypeSummaryParams) ([]GetSuburbLossTypeSummaryRow, error) {
@@ -922,6 +1263,7 @@ func (q *Queries) GetSuburbLossTypeSummary(ctx context.Context, arg GetSuburbLos
 			&i.Losses,
 			&i.TotalLoss,
 			&i.AverageLoss,
+			&i.AverageLossPercent,
 			&i.LargestLoss,
 		); err != nil {
 			return nil, err
@@ -1156,9 +1498,14 @@ SELECT suburb, state, property_count, sales_count, avg_price, max_price, min_pri
        change_1y, change_5y, change_10y,
        COUNT(*) OVER () AS total_count
 FROM suburb_stats
-ORDER BY sales_count DESC, suburb ASC
-LIMIT ?1
+ORDER BY sales_count DESC, suburb ASC, state ASC
+LIMIT ?2 OFFSET ?1
 `
+
+type GetSuburbOverviewStatsParams struct {
+	RowOffset int64
+	RowLimit  int64
+}
 
 type GetSuburbOverviewStatsRow struct {
 	Suburb        string
@@ -1174,8 +1521,8 @@ type GetSuburbOverviewStatsRow struct {
 	TotalCount    int64
 }
 
-func (q *Queries) GetSuburbOverviewStats(ctx context.Context, rowLimit int64) ([]GetSuburbOverviewStatsRow, error) {
-	rows, err := q.db.QueryContext(ctx, getSuburbOverviewStats, rowLimit)
+func (q *Queries) GetSuburbOverviewStats(ctx context.Context, arg GetSuburbOverviewStatsParams) ([]GetSuburbOverviewStatsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getSuburbOverviewStats, arg.RowOffset, arg.RowLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -1306,6 +1653,38 @@ func (q *Queries) GetSuburbSalesCount(ctx context.Context, arg GetSuburbSalesCou
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const getSuburbStats = `-- name: GetSuburbStats :one
+SELECT suburb, state, property_count, sales_count, avg_price, max_price, min_price,
+       change_1y, change_5y, change_10y, updated_at
+FROM suburb_stats
+WHERE suburb = UPPER(?1) AND state = UPPER(?2)
+LIMIT 1
+`
+
+type GetSuburbStatsParams struct {
+	Suburb string
+	State  string
+}
+
+func (q *Queries) GetSuburbStats(ctx context.Context, arg GetSuburbStatsParams) (SuburbStat, error) {
+	row := q.db.QueryRowContext(ctx, getSuburbStats, arg.Suburb, arg.State)
+	var i SuburbStat
+	err := row.Scan(
+		&i.Suburb,
+		&i.State,
+		&i.PropertyCount,
+		&i.SalesCount,
+		&i.AvgPrice,
+		&i.MaxPrice,
+		&i.MinPrice,
+		&i.Change1y,
+		&i.Change5y,
+		&i.Change10y,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getTopSuburbs = `-- name: GetTopSuburbs :many
@@ -1690,6 +2069,211 @@ func (q *Queries) ListStreetProperties(ctx context.Context, arg ListStreetProper
 			&i.LandArea,
 			&i.BasePid,
 			&i.DwellingType,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSuburbGrowth = `-- name: ListSuburbGrowth :many
+WITH filtered AS (
+    SELECT
+        s.suburb,
+        s.state,
+        s.property_count,
+        s.sales_count,
+        s.avg_price,
+        s.max_price,
+        s.min_price,
+        s.change_1y,
+        s.change_5y,
+        s.change_10y,
+        s.updated_at,
+        CAST(CASE p.range_key
+            WHEN '1' THEN s.change_1y
+            WHEN '5' THEN s.change_5y
+            ELSE s.change_10y
+        END AS REAL) AS change_pct,
+        p.dir_key AS direction
+    FROM suburb_stats s
+    CROSS JOIN (
+        SELECT CAST(?3 AS TEXT) AS range_key, CAST(?4 AS TEXT) AS dir_key
+    ) p
+    WHERE s.sales_count >= CAST(?5 AS INTEGER)
+)
+SELECT
+    suburb, state, property_count, sales_count, avg_price, max_price, min_price,
+    change_1y, change_5y, change_10y, updated_at, change_pct,
+    COUNT(*) OVER () AS total_count
+FROM filtered
+WHERE change_pct IS NOT NULL
+ORDER BY
+    CASE WHEN direction = 'bottom' THEN change_pct END ASC,
+    CASE WHEN direction = 'top' THEN change_pct END DESC,
+    sales_count DESC,
+    suburb ASC,
+    state ASC
+LIMIT ?2 OFFSET ?1
+`
+
+type ListSuburbGrowthParams struct {
+	RowOffset int64
+	RowLimit  int64
+	Range     string
+	Direction string
+	MinSales  int64
+}
+
+type ListSuburbGrowthRow struct {
+	Suburb        string
+	State         string
+	PropertyCount int64
+	SalesCount    int64
+	AvgPrice      int64
+	MaxPrice      int64
+	MinPrice      int64
+	Change1y      sql.NullFloat64
+	Change5y      sql.NullFloat64
+	Change10y     sql.NullFloat64
+	UpdatedAt     string
+	ChangePct     float64
+	TotalCount    int64
+}
+
+func (q *Queries) ListSuburbGrowth(ctx context.Context, arg ListSuburbGrowthParams) ([]ListSuburbGrowthRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSuburbGrowth,
+		arg.RowOffset,
+		arg.RowLimit,
+		arg.Range,
+		arg.Direction,
+		arg.MinSales,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSuburbGrowthRow
+	for rows.Next() {
+		var i ListSuburbGrowthRow
+		if err := rows.Scan(
+			&i.Suburb,
+			&i.State,
+			&i.PropertyCount,
+			&i.SalesCount,
+			&i.AvgPrice,
+			&i.MaxPrice,
+			&i.MinPrice,
+			&i.Change1y,
+			&i.Change5y,
+			&i.Change10y,
+			&i.UpdatedAt,
+			&i.ChangePct,
+			&i.TotalCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSuburbLossStats = `-- name: ListSuburbLossStats :many
+SELECT
+    suburb,
+    state,
+    period,
+    resales,
+    losses,
+    total_loss,
+    average_loss,
+    average_loss_percent,
+    largest_loss,
+    flagged_losses,
+    updated_at,
+    CAST(CASE WHEN resales > 0 THEN losses * 100.0 / resales ELSE 0 END AS REAL) AS loss_rate
+FROM suburb_loss_stats
+CROSS JOIN (SELECT CAST(?1 AS TEXT) AS sort_key) sort_params
+WHERE period = '2y'
+  AND losses > 0
+  AND (sort_params.sort_key <> 'rate' OR resales >= CAST(?2 AS INTEGER))
+  AND (sort_params.sort_key <> 'average_loss' OR losses >= CAST(?3 AS INTEGER))
+ORDER BY
+    CASE WHEN sort_params.sort_key = 'rate'
+         THEN CAST(losses AS REAL) / NULLIF(resales, 0) END DESC,
+    CASE WHEN sort_params.sort_key = 'average_loss' THEN average_loss_percent END DESC,
+    losses DESC,
+    average_loss_percent DESC,
+    total_loss DESC,
+    suburb ASC,
+    state ASC
+LIMIT ?5 OFFSET ?4
+`
+
+type ListSuburbLossStatsParams struct {
+	Sort       string
+	MinResales int64
+	MinLosses  int64
+	RowOffset  int64
+	RowLimit   int64
+}
+
+type ListSuburbLossStatsRow struct {
+	Suburb             string
+	State              string
+	Period             string
+	Resales            int64
+	Losses             int64
+	TotalLoss          int64
+	AverageLoss        int64
+	AverageLossPercent float64
+	LargestLoss        int64
+	FlaggedLosses      int64
+	UpdatedAt          string
+	LossRate           float64
+}
+
+func (q *Queries) ListSuburbLossStats(ctx context.Context, arg ListSuburbLossStatsParams) ([]ListSuburbLossStatsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSuburbLossStats,
+		arg.Sort,
+		arg.MinResales,
+		arg.MinLosses,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSuburbLossStatsRow
+	for rows.Next() {
+		var i ListSuburbLossStatsRow
+		if err := rows.Scan(
+			&i.Suburb,
+			&i.State,
+			&i.Period,
+			&i.Resales,
+			&i.Losses,
+			&i.TotalLoss,
+			&i.AverageLoss,
+			&i.AverageLossPercent,
+			&i.LargestLoss,
+			&i.FlaggedLosses,
+			&i.UpdatedAt,
+			&i.LossRate,
 		); err != nil {
 			return nil, err
 		}

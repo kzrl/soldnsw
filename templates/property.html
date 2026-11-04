@@ -70,6 +70,9 @@
                                 <div class="column">
                                     <p class="heading has-text-grey-dark mb-1">Latest recorded sale</p>
                                     <p class="title is-2 has-text-success mb-1">${{formatPrice (index .Sales 0).SalePrice}}</p>
+                                    {{if gt .LatestPricePerSqm 0}}
+                                    <p class="is-size-7 has-text-grey">${{formatPrice .LatestPricePerSqm}}/m² on {{formatArea .Property.LandArea.Float64}}</p>
+                                    {{end}}
                                     <p class="is-size-7 has-text-grey">
                                         {{formatDate (index .Sales 0).SettlementDate}} &bull; {{if eq (index .Sales 0).SourceType "NSW Valuer General (PSI)"}}Valuer General{{else}}{{(index .Sales 0).SourceType}}{{end}}
                                     </p>
@@ -152,6 +155,7 @@
                                     <tr class="has-background-light">
                                         <th scope="col">Date</th>
                                         <th scope="col">Sale price</th>
+                                        <th scope="col">Land $/m²</th>
                                         <th scope="col">Change</th>
                                         <th scope="col">Source</th>
                                     </tr>
@@ -164,6 +168,7 @@
                                             {{if .IsLatest}}<span class="tag is-success is-light is-small ml-2">Latest</span>{{end}}
                                         </td>
                                         <td class="nowrap"><span class="has-text-weight-bold has-text-success">${{formatPrice .SalePrice}}</span></td>
+                                        <td class="nowrap">{{if gt .PricePerSqm 0}}${{formatPrice .PricePerSqm}}/m²{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>
                                         <td class="nowrap">
                                             {{if .HasChange}}
                                             <span class="{{if lt .ChangeAmount 0}}has-text-danger{{else}}has-text-success{{end}}">
@@ -191,6 +196,71 @@
                                 <i class="fa-solid fa-plus mr-1"></i> Add the first sale
                             </a>
                         </div>
+                        {{end}}
+                    </div>
+                </div>
+
+                <!-- Comparable sales -->
+                <div class="card shadow-sm mt-5">
+                    <header class="card-header has-background-white-ter">
+                        <p class="card-header-title">
+                            <i class="fa-solid fa-scale-balanced mr-2 has-text-info"></i> Comparable sales
+                        </p>
+                    </header>
+                    <div class="card-content">
+                        {{if .ComparableSummary}}
+                        <p class="is-size-7 has-text-grey mb-4">
+                            Latest recorded sale per property in {{.Property.Suburb}}, {{.ComparablesWindow}}.
+                            Same-street sales are shown first, then properties with similar land area.
+                        </p>
+                        <div class="columns is-mobile is-multiline mb-4 comparable-summary">
+                            <div class="column is-4 has-text-centered">
+                                <p class="heading has-text-grey mb-1">Median sale</p>
+                                <p class="title is-6 has-text-primary mb-0 comparable-figure">${{formatPrice .ComparableSummary.MedianPrice}}</p>
+                                <p class="is-size-7 has-text-grey">{{.ComparableSummary.Count}} comparable{{if ne .ComparableSummary.Count 1}}s{{end}}</p>
+                            </div>
+                            <div class="column is-4 has-text-centered">
+                                <p class="heading has-text-grey mb-1">Median land value</p>
+                                <p class="title is-6 has-text-success mb-0 comparable-figure">{{if gt .ComparableSummary.MedianPricePerSqm 0}}${{formatPrice .ComparableSummary.MedianPricePerSqm}}/m²{{else}}—{{end}}</p>
+                                <p class="is-size-7 has-text-grey">{{.ComparableSummary.PricePerSqmCount}} with land area</p>
+                            </div>
+                            <div class="column is-4 has-text-centered">
+                                <p class="heading has-text-grey mb-1">Same street</p>
+                                <p class="title is-6 has-text-info mb-0 comparable-figure">{{.ComparableSummary.SameStreetCount}}</p>
+                                <p class="is-size-7 has-text-grey">{{if gt .ComparableSummary.MedianLandArea 0.0}}Median {{formatArea .ComparableSummary.MedianLandArea}}{{else}}No land area{{end}}</p>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table class="table is-fullwidth is-striped is-hoverable is-size-7 comparable-sales-table mb-0">
+                                <thead>
+                                    <tr class="has-background-light">
+                                        <th scope="col">Address</th>
+                                        <th scope="col">Sold</th>
+                                        <th scope="col" class="has-text-right">Price</th>
+                                        <th scope="col" class="has-text-right">Land</th>
+                                        <th scope="col" class="has-text-right">$/m²</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {{range .Comparables}}
+                                    <tr>
+                                        <td>
+                                            <a href="/property/{{.GnafPid}}" class="has-text-weight-bold">
+                                                {{if and .StreetNumber.Valid .StreetNumber.String}}{{.StreetNumber.String}} {{end}}{{.StreetName}} {{.StreetType}}
+                                            </a>
+                                            {{if eq .SameStreet 1}}<span class="tag is-success is-light is-small ml-1">Same street</span>{{end}}
+                                        </td>
+                                        <td class="nowrap">{{formatDate .SettlementDate}}</td>
+                                        <td class="nowrap has-text-right has-text-weight-bold has-text-success">${{formatPrice .SalePrice}}</td>
+                                        <td class="nowrap has-text-right">{{if .LandArea.Valid}}{{formatArea .LandArea.Float64}}{{else}}—{{end}}</td>
+                                        <td class="nowrap has-text-right">{{if gt .PricePerSqm 0}}${{formatPrice .PricePerSqm}}{{else}}—{{end}}</td>
+                                    </tr>
+                                    {{end}}
+                                </tbody>
+                            </table>
+                        </div>
+                        {{else}}
+                        <p class="has-text-grey">No other recorded sales are available in this suburb for comparison.</p>
                         {{end}}
                     </div>
                 </div>

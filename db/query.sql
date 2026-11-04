@@ -98,13 +98,77 @@ JOIN property_links pl ON pl.gnaf_pid = s.gnaf_pid
 WHERE pl.canonical_pid = ?
 ORDER BY s.settlement_date DESC, s.sale_id DESC;
 
+-- name: GetPropertyComparables :many
+WITH subject AS (
+    SELECT
+        p.gnaf_pid,
+        p.suburb,
+        p.state,
+        p.street_name,
+        p.street_type,
+        p.dwelling_type,
+        p.land_area
+    FROM gnaf_properties p
+    WHERE p.gnaf_pid = @pid
+),
+latest AS (
+    SELECT
+        cs.canonical_pid,
+        cs.sale_id,
+        cs.settlement_date,
+        cs.sale_price,
+        cs.source_type,
+        ROW_NUMBER() OVER (
+            PARTITION BY cs.canonical_pid
+            ORDER BY cs.settlement_date DESC, cs.sale_id DESC
+        ) AS rn
+    FROM canonical_sales cs
+    JOIN subject s ON s.suburb = cs.suburb AND s.state = cs.state
+    WHERE cs.canonical_pid <> s.gnaf_pid
+      AND cs.settlement_date >= @cutoff
+)
+SELECT
+    l.canonical_pid AS gnaf_pid,
+    p.street_number,
+    p.street_name,
+    p.street_type,
+    p.suburb,
+    p.state,
+    p.postcode,
+    p.dwelling_type,
+    p.land_area,
+    l.settlement_date,
+    l.sale_price,
+    l.source_type,
+    CAST(CASE WHEN p.land_area > 0 THEN l.sale_price / p.land_area ELSE 0 END AS INTEGER) AS price_per_sqm,
+    CASE WHEN p.street_name = s.street_name AND p.street_type = s.street_type THEN 1 ELSE 0 END AS same_street
+FROM latest l
+JOIN gnaf_properties p ON p.gnaf_pid = l.canonical_pid
+CROSS JOIN subject s
+WHERE l.rn = 1
+  AND (
+      s.dwelling_type IN ('', 'unknown')
+      OR p.dwelling_type = s.dwelling_type
+      OR (s.dwelling_type = 'other' AND p.dwelling_type = 'unknown')
+  )
+ORDER BY
+    same_street DESC,
+    CASE WHEN s.land_area > 0 AND p.land_area > 0
+         THEN ABS(p.land_area - s.land_area) END ASC,
+    l.settlement_date DESC,
+    l.sale_id DESC
+LIMIT @row_limit;
+
 -- name: GetSuburbAnalytics :many
 WITH filtered AS (
     SELECT
         cs.sale_price,
+        p.land_area,
+        p.dwelling_type,
         ROW_NUMBER() OVER (ORDER BY cs.sale_price) AS rn,
         COUNT(*) OVER () AS cnt
     FROM canonical_sales cs
+    JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
     WHERE cs.suburb = UPPER(@suburb) AND cs.state = UPPER(@state)
       AND cs.settlement_date >= @cutoff
 ),
@@ -113,6 +177,23 @@ med AS (
         WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN sale_price
     END) AS median_price
     FROM filtered
+),
+ppm AS (
+    SELECT
+        sale_price * 1.0 / land_area AS price_per_sqm,
+        ROW_NUMBER() OVER (ORDER BY sale_price * 1.0 / land_area) AS rn,
+        COUNT(*) OVER () AS cnt
+    FROM filtered
+    WHERE land_area > 0 AND dwelling_type = 'house'
+),
+ppm_med AS (
+    SELECT
+        AVG(CASE
+            WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN price_per_sqm
+        END) AS median_price_per_sqm,
+        AVG(price_per_sqm) AS avg_price_per_sqm,
+        MAX(cnt) AS sample_count
+    FROM ppm
 )
 SELECT
     UPPER(@suburb) AS suburb,
@@ -120,9 +201,13 @@ SELECT
     AVG(f.sale_price) AS avg_price,
     CAST(COALESCE(med.median_price, 0) AS INTEGER) AS median_price,
     CAST(COALESCE(MAX(f.sale_price), 0) AS INTEGER) AS max_price,
-    CAST(COALESCE(MIN(f.sale_price), 0) AS INTEGER) AS min_price
+    CAST(COALESCE(MIN(f.sale_price), 0) AS INTEGER) AS min_price,
+    CAST(COALESCE(ppm_med.median_price_per_sqm, 0) AS INTEGER) AS median_price_per_sqm,
+    CAST(COALESCE(ppm_med.avg_price_per_sqm, 0) AS INTEGER) AS avg_price_per_sqm,
+    CAST(COALESCE(ppm_med.sample_count, 0) AS INTEGER) AS sqm_sample_count
 FROM filtered f
-CROSS JOIN med;
+CROSS JOIN med
+CROSS JOIN ppm_med;
 
 -- name: InsertGnafProperty :exec
 INSERT INTO gnaf_properties (
@@ -172,8 +257,79 @@ SELECT suburb, state, property_count, sales_count, avg_price, max_price, min_pri
        change_1y, change_5y, change_10y,
        COUNT(*) OVER () AS total_count
 FROM suburb_stats
-ORDER BY sales_count DESC, suburb ASC
-LIMIT @row_limit;
+ORDER BY sales_count DESC, suburb ASC, state ASC
+LIMIT @row_limit OFFSET @row_offset;
+
+-- name: CountSuburbStats :one
+SELECT COUNT(*) FROM suburb_stats;
+
+-- name: GetSuburbStats :one
+SELECT suburb, state, property_count, sales_count, avg_price, max_price, min_price,
+       change_1y, change_5y, change_10y, updated_at
+FROM suburb_stats
+WHERE suburb = UPPER(@suburb) AND state = UPPER(@state)
+LIMIT 1;
+
+-- name: ListSuburbGrowth :many
+WITH filtered AS (
+    SELECT
+        s.suburb,
+        s.state,
+        s.property_count,
+        s.sales_count,
+        s.avg_price,
+        s.max_price,
+        s.min_price,
+        s.change_1y,
+        s.change_5y,
+        s.change_10y,
+        s.updated_at,
+        CAST(CASE p.range_key
+            WHEN '1' THEN s.change_1y
+            WHEN '5' THEN s.change_5y
+            ELSE s.change_10y
+        END AS REAL) AS change_pct,
+        p.dir_key AS direction
+    FROM suburb_stats s
+    CROSS JOIN (
+        SELECT CAST(@range AS TEXT) AS range_key, CAST(@direction AS TEXT) AS dir_key
+    ) p
+    WHERE s.sales_count >= CAST(@min_sales AS INTEGER)
+)
+SELECT
+    suburb, state, property_count, sales_count, avg_price, max_price, min_price,
+    change_1y, change_5y, change_10y, updated_at, change_pct,
+    COUNT(*) OVER () AS total_count
+FROM filtered
+WHERE change_pct IS NOT NULL
+ORDER BY
+    CASE WHEN direction = 'bottom' THEN change_pct END ASC,
+    CASE WHEN direction = 'top' THEN change_pct END DESC,
+    sales_count DESC,
+    suburb ASC,
+    state ASC
+LIMIT @row_limit OFFSET @row_offset;
+
+-- name: GetSuburbGrowthSummary :one
+WITH filtered AS (
+    SELECT
+        s.updated_at,
+        CAST(CASE p.range_key
+            WHEN '1' THEN s.change_1y
+            WHEN '5' THEN s.change_5y
+            ELSE s.change_10y
+        END AS REAL) AS change_pct
+    FROM suburb_stats s
+    CROSS JOIN (SELECT CAST(@range AS TEXT) AS range_key) p
+    WHERE s.sales_count >= CAST(@min_sales AS INTEGER)
+)
+SELECT
+    CAST(COUNT(CASE WHEN change_pct IS NOT NULL THEN 1 END) AS INTEGER) AS suburbs,
+    CAST(COALESCE(AVG(change_pct), 0) AS REAL) AS average_change,
+    CAST(COUNT(CASE WHEN change_pct > 0 THEN 1 END) AS INTEGER) AS rising,
+    CAST(COUNT(CASE WHEN change_pct < 0 THEN 1 END) AS INTEGER) AS falling,
+    CAST(COALESCE(MAX(updated_at), '') AS TEXT) AS updated_at
+FROM filtered;
 
 -- name: GetTotalPropertiesCount :one
 SELECT CAST(COALESCE(SUM(property_count), 0) AS INTEGER) FROM suburb_stats;
@@ -242,12 +398,68 @@ SELECT
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN sale_price - previous_price
     END), 0) AS INTEGER) AS average_loss,
+    CAST(COALESCE(AVG(CASE
+        WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
+             AND sale_price < previous_price AND settlement_date >= @cutoff
+        THEN (previous_price - sale_price) * 100.0 / NULLIF(previous_price, 0)
+    END), 0) AS REAL) AS average_loss_percent,
     CAST(COALESCE(MIN(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN sale_price - previous_price
     END), 0) AS INTEGER) AS largest_loss
 FROM ordered;
+
+-- name: ListSuburbLossStats :many
+SELECT
+    suburb,
+    state,
+    period,
+    resales,
+    losses,
+    total_loss,
+    average_loss,
+    average_loss_percent,
+    largest_loss,
+    flagged_losses,
+    updated_at,
+    CAST(CASE WHEN resales > 0 THEN losses * 100.0 / resales ELSE 0 END AS REAL) AS loss_rate
+FROM suburb_loss_stats
+CROSS JOIN (SELECT CAST(@sort AS TEXT) AS sort_key) sort_params
+WHERE period = '2y'
+  AND losses > 0
+  AND (sort_params.sort_key <> 'rate' OR resales >= CAST(@min_resales AS INTEGER))
+  AND (sort_params.sort_key <> 'average_loss' OR losses >= CAST(@min_losses AS INTEGER))
+ORDER BY
+    CASE WHEN sort_params.sort_key = 'rate'
+         THEN CAST(losses AS REAL) / NULLIF(resales, 0) END DESC,
+    CASE WHEN sort_params.sort_key = 'average_loss' THEN average_loss_percent END DESC,
+    losses DESC,
+    average_loss_percent DESC,
+    total_loss DESC,
+    suburb ASC,
+    state ASC
+LIMIT @row_limit OFFSET @row_offset;
+
+-- name: CountSuburbLossStats :one
+SELECT COUNT(*)
+FROM suburb_loss_stats
+WHERE period = '2y'
+  AND losses > 0
+  AND (CAST(@sort AS TEXT) <> 'rate' OR resales >= CAST(@min_resales AS INTEGER))
+  AND (CAST(@sort AS TEXT) <> 'average_loss' OR losses >= CAST(@min_losses AS INTEGER));
+
+-- name: GetSuburbLossStatsSummary :one
+SELECT
+    CAST(COUNT(CASE WHEN losses > 0 THEN 1 END) AS INTEGER) AS suburbs_affected,
+    CAST(COALESCE(SUM(resales), 0) AS INTEGER) AS resales,
+    CAST(COALESCE(SUM(losses), 0) AS INTEGER) AS losses,
+    CAST(COALESCE(SUM(total_loss), 0) AS INTEGER) AS total_loss,
+    CAST(COALESCE(SUM(average_loss_percent * losses) / NULLIF(SUM(losses), 0), 0) AS REAL) AS average_loss_percent,
+    CAST(COALESCE(SUM(flagged_losses), 0) AS INTEGER) AS flagged_losses,
+    CAST(COALESCE(MAX(updated_at), '') AS TEXT) AS updated_at
+FROM suburb_loss_stats
+WHERE period = '2y';
 
 -- name: GetSuburbLossTypeSummary :many
 WITH base AS (
@@ -297,6 +509,11 @@ SELECT
              AND sale_price < previous_price AND settlement_date >= @cutoff
         THEN sale_price - previous_price
     END), 0) AS INTEGER) AS average_loss,
+    CAST(COALESCE(AVG(CASE
+        WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
+             AND sale_price < previous_price AND settlement_date >= @cutoff
+        THEN (previous_price - sale_price) * 100.0 / NULLIF(previous_price, 0)
+    END), 0) AS REAL) AS average_loss_percent,
     CAST(COALESCE(MIN(CASE
         WHEN rn = 1 AND previous_price IS NOT NULL AND previous_date < settlement_date
              AND sale_price < previous_price AND settlement_date >= @cutoff
@@ -620,8 +837,13 @@ WITH props AS (
       AND (pl.canonical_pid IS NULL OR pl.canonical_pid = p.gnaf_pid)
 ),
 sales AS (
-    SELECT cs.sale_price, cs.settlement_date
+    SELECT
+        cs.sale_price,
+        cs.settlement_date,
+        p.land_area,
+        p.dwelling_type
     FROM canonical_sales cs
+    JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
     WHERE cs.postcode = @postcode
 ),
 filtered AS (
@@ -636,6 +858,22 @@ med AS (
         WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN sale_price
     END) AS median_price
     FROM filtered
+),
+ppm AS (
+    SELECT
+        sale_price * 1.0 / land_area AS price_per_sqm,
+        ROW_NUMBER() OVER (ORDER BY sale_price * 1.0 / land_area) AS rn,
+        COUNT(*) OVER () AS cnt
+    FROM sales
+    WHERE land_area > 0 AND dwelling_type = 'house'
+),
+ppm_med AS (
+    SELECT
+        AVG(CASE
+            WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN price_per_sqm
+        END) AS median_price_per_sqm,
+        MAX(cnt) AS sample_count
+    FROM ppm
 )
 SELECT
     (SELECT COUNT(*) FROM props) AS property_count,
@@ -645,8 +883,11 @@ SELECT
     CAST(COALESCE((SELECT MAX(sale_price) FROM sales), 0) AS INTEGER) AS max_price,
     CAST(COALESCE((SELECT MIN(sale_price) FROM sales), 0) AS INTEGER) AS min_price,
     CAST(COALESCE((SELECT MAX(settlement_date) FROM sales), '') AS TEXT) AS latest_sale_date,
-    (SELECT COUNT(*) FROM (SELECT DISTINCT suburb, state FROM props)) AS suburb_count
-FROM med;
+    (SELECT COUNT(*) FROM (SELECT DISTINCT suburb, state FROM props)) AS suburb_count,
+    CAST(COALESCE(ppm_med.median_price_per_sqm, 0) AS INTEGER) AS median_price_per_sqm,
+    CAST(COALESCE(ppm_med.sample_count, 0) AS INTEGER) AS sqm_sample_count
+FROM med
+CROSS JOIN ppm_med;
 
 -- name: GetPostcodeSuburbs :many
 WITH props AS (
@@ -685,9 +926,14 @@ WITH props AS (
       AND p.postcode = @postcode
 ),
 sales AS (
-    SELECT cs.sale_price, cs.settlement_date
+    SELECT
+        cs.sale_price,
+        cs.settlement_date,
+        p.land_area,
+        p.dwelling_type
     FROM canonical_sales cs
     JOIN props pr ON pr.gnaf_pid = cs.canonical_pid
+    JOIN gnaf_properties p ON p.gnaf_pid = cs.canonical_pid
 ),
 filtered AS (
     SELECT
@@ -701,6 +947,22 @@ med AS (
         WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN sale_price
     END) AS median_price
     FROM filtered
+),
+ppm AS (
+    SELECT
+        sale_price * 1.0 / land_area AS price_per_sqm,
+        ROW_NUMBER() OVER (ORDER BY sale_price * 1.0 / land_area) AS rn,
+        COUNT(*) OVER () AS cnt
+    FROM sales
+    WHERE land_area > 0 AND dwelling_type = 'house'
+),
+ppm_med AS (
+    SELECT
+        AVG(CASE
+            WHEN rn IN ((cnt + 1) / 2, (cnt + 2) / 2) THEN price_per_sqm
+        END) AS median_price_per_sqm,
+        MAX(cnt) AS sample_count
+    FROM ppm
 )
 SELECT
     (SELECT COUNT(*) FROM props) AS property_count,
@@ -709,8 +971,11 @@ SELECT
     CAST(COALESCE(med.median_price, 0) AS INTEGER) AS median_price,
     CAST(COALESCE((SELECT MAX(sale_price) FROM sales), 0) AS INTEGER) AS max_price,
     CAST(COALESCE((SELECT MIN(sale_price) FROM sales), 0) AS INTEGER) AS min_price,
-    CAST(COALESCE((SELECT MAX(settlement_date) FROM sales), '') AS TEXT) AS latest_sale_date
-FROM med;
+    CAST(COALESCE((SELECT MAX(settlement_date) FROM sales), '') AS TEXT) AS latest_sale_date,
+    CAST(COALESCE(ppm_med.median_price_per_sqm, 0) AS INTEGER) AS median_price_per_sqm,
+    CAST(COALESCE(ppm_med.sample_count, 0) AS INTEGER) AS sqm_sample_count
+FROM med
+CROSS JOIN ppm_med;
 
 -- name: SuggestSuburbs :many
 SELECT suburb, state, property_count, sales_count

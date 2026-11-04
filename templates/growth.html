@@ -1,0 +1,216 @@
+{{define "title"}}Fastest Growing Suburbs - SoldNSW{{end}}
+
+{{define "content"}}
+<section class="section py-5">
+    <div class="container">
+        <nav class="breadcrumb has-succeeds-separator is-small mb-4" aria-label="breadcrumbs">
+            <ul>
+                <li><a href="/"><i class="fa-solid fa-house mr-1"></i> Home</a></li>
+                <li><a href="/suburbs">Suburbs</a></li>
+                <li class="is-active"><a aria-current="page">Growth</a></li>
+            </ul>
+        </nav>
+
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <h1 class="title is-3 mb-1">
+                        <i class="fa-solid fa-arrow-trend-up has-text-success mr-2"></i>
+                        {{if eq .GrowthDirection "bottom"}}Slowest growing suburbs{{else}}Fastest growing suburbs{{end}}
+                    </h1>
+                    <p class="subtitle is-6 has-text-grey mb-0">
+                        Average sale price change over the {{rangeLabel .GrowthRange}}, with a minimum recorded sales threshold.
+                    </p>
+                    {{if .GrowthSummary.UpdatedAt}}
+                    <p class="is-size-7 has-text-grey mt-1">Analytics updated {{formatDateTime .GrowthSummary.UpdatedAt}}</p>
+                    {{end}}
+                </div>
+            </div>
+            <div class="level-right">
+                <div class="buttons mb-0">
+                    <a href="/suburbs/most-losses" class="button is-small is-danger is-light">
+                        <span class="icon"><i class="fa-solid fa-arrow-trend-down"></i></span>
+                        <span>Most losses</span>
+                    </a>
+                    <a href="/suburbs" class="button is-small is-light">
+                        <span class="icon"><i class="fa-solid fa-arrow-left"></i></span>
+                        <span>All suburbs</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        {{if .SearchError}}
+        <div class="notification is-danger is-light">
+            <p><i class="fa-solid fa-triangle-exclamation mr-1"></i> {{.SearchError}}</p>
+        </div>
+        {{end}}
+
+        {{if eq .StatsStatus "building"}}
+        <div class="notification is-info is-light">
+            <p><i class="fa-solid fa-gears mr-1"></i> Growth rankings are being prepared. This can take a few minutes on first startup.</p>
+        </div>
+        {{else if eq .StatsStatus "failed"}}
+        <div class="notification is-danger is-light">
+            <p><i class="fa-solid fa-triangle-exclamation mr-1"></i> Growth rankings could not be built. Please try again later or contact the administrator.</p>
+        </div>
+        {{end}}
+
+        <div class="columns is-multiline mb-5">
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
+                <div class="card p-4 has-background-success-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-city mr-1"></i> Suburbs ranked</p>
+                    <p class="title is-3 has-text-success mb-0">{{.GrowthSummary.Suburbs}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">At least {{.GrowthMinSales}} recorded sales</p>
+                </div>
+            </div>
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
+                <div class="card p-4 has-background-primary-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-percent mr-1"></i> Average change</p>
+                    <p class="title is-3 {{if lt .GrowthSummary.AverageChange 0.0}}has-text-danger{{else}}has-text-primary{{end}} mb-0">{{printf "%+.1f%%" .GrowthSummary.AverageChange}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">{{rangeLabel .GrowthRange}}</p>
+                </div>
+            </div>
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
+                <div class="card p-4 has-background-info-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-up mr-1"></i> Rising</p>
+                    <p class="title is-3 has-text-info mb-0">{{.GrowthSummary.Rising}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Suburbs with positive change</p>
+                </div>
+            </div>
+            <div class="column is-12-mobile is-6-tablet is-3-desktop">
+                <div class="card p-4 has-background-warning-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-arrow-down mr-1"></i> Falling</p>
+                    <p class="title is-3 has-text-warning-dark mb-0">{{.GrowthSummary.Falling}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Suburbs with negative change</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="level mb-3 is-flex-wrap-wrap" id="rankings">
+            <div class="level-left">
+                <div class="buttons has-addons mb-0 mr-4">
+                    <a href="/suburbs/growth?range=1&direction={{.GrowthDirection}}&min_sales={{.GrowthMinSales}}" class="button is-small {{if eq .GrowthRange "1"}}is-primary{{else}}is-light{{end}}">1 year</a>
+                    <a href="/suburbs/growth?range=5&direction={{.GrowthDirection}}&min_sales={{.GrowthMinSales}}" class="button is-small {{if eq .GrowthRange "5"}}is-primary{{else}}is-light{{end}}">5 years</a>
+                    <a href="/suburbs/growth?range=10&direction={{.GrowthDirection}}&min_sales={{.GrowthMinSales}}" class="button is-small {{if eq .GrowthRange "10"}}is-primary{{else}}is-light{{end}}">10 years</a>
+                </div>
+                <div class="buttons has-addons mb-0">
+                    <a href="/suburbs/growth?range={{.GrowthRange}}&direction=top&min_sales={{.GrowthMinSales}}" class="button is-small {{if eq .GrowthDirection "top"}}is-success{{else}}is-light{{end}}">Top growth</a>
+                    <a href="/suburbs/growth?range={{.GrowthRange}}&direction=bottom&min_sales={{.GrowthMinSales}}" class="button is-small {{if eq .GrowthDirection "bottom"}}is-danger{{else}}is-light{{end}}">Bottom growth</a>
+                </div>
+            </div>
+            <div class="level-right mt-2">
+                <form action="/suburbs/growth" method="GET" class="is-flex is-align-items-center">
+                    <input type="hidden" name="range" value="{{.GrowthRange}}">
+                    <input type="hidden" name="direction" value="{{.GrowthDirection}}">
+                    <label for="growthMinSales" class="is-size-7 has-text-grey mr-2 nowrap">Minimum sales</label>
+                    <div class="select is-small">
+                        <select id="growthMinSales" name="min_sales" onchange="this.form.submit()">
+                            <option value="10" {{if eq .GrowthMinSales 10}}selected{{end}}>10</option>
+                            <option value="20" {{if eq .GrowthMinSales 20}}selected{{end}}>20</option>
+                            <option value="50" {{if eq .GrowthMinSales 50}}selected{{end}}>50</option>
+                            <option value="100" {{if eq .GrowthMinSales 100}}selected{{end}}>100</option>
+                            {{if and (ne .GrowthMinSales 10) (ne .GrowthMinSales 20) (ne .GrowthMinSales 50) (ne .GrowthMinSales 100)}}
+                            <option value="{{.GrowthMinSales}}" selected>{{.GrowthMinSales}}</option>
+                            {{end}}
+                        </select>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <p class="is-size-7 has-text-grey mb-4">
+            <i class="fa-solid fa-circle-info mr-1"></i>
+            Change compares the latest 12-month average sale price with the 12-month average ending {{if eq .GrowthRange "1"}}1 year{{else}}{{.GrowthRange}} years{{end}} ago. Rankings include suburbs with at least {{.GrowthMinSales}} recorded sales; nominal values are not adjusted for property mix.
+        </p>
+
+        {{if .GrowthRows}}
+        <!-- Desktop ranking -->
+        <div class="is-hidden-mobile">
+            <div class="table-container">
+                <table class="table is-fullwidth is-striped is-hoverable growth-table mb-0">
+                    <thead>
+                        <tr class="has-background-light">
+                            <th scope="col">Rank</th>
+                            <th scope="col">Suburb</th>
+                            <th scope="col">State</th>
+                            <th scope="col" class="has-text-right">{{rangeLabel .GrowthRange}} change</th>
+                            <th scope="col" class="has-text-right">1y</th>
+                            <th scope="col" class="has-text-right">5y</th>
+                            <th scope="col" class="has-text-right">10y</th>
+                            <th scope="col" class="has-text-right">Avg sale</th>
+                            <th scope="col" class="has-text-right">Sales</th>
+                            <th scope="col" class="has-text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .GrowthRows}}
+                        <tr>
+                            <td class="has-text-grey">{{.Rank}}</td>
+                            <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-weight-bold">{{.Suburb}}</a></td>
+                            <td><span class="tag is-dark is-light">{{.State}}</span></td>
+                            <td class="has-text-right has-text-weight-bold {{if lt .ChangePct 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .ChangePct}}</td>
+                            <td class="has-text-right">{{if .Change1y.Valid}}<span class="{{if lt .Change1y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change1y.Float64}}</span>{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>
+                            <td class="has-text-right">{{if .Change5y.Valid}}<span class="{{if lt .Change5y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change5y.Float64}}</span>{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>
+                            <td class="has-text-right">{{if .Change10y.Valid}}<span class="{{if lt .Change10y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change10y.Float64}}</span>{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>
+                            <td class="has-text-right">${{formatPrice .AvgPrice}}</td>
+                            <td class="has-text-right">{{.SalesCount}}</td>
+                            <td class="has-text-right nowrap">
+                                <a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="button is-small is-primary is-light">Trends</a>
+                                <a href="/compare?suburbs={{urlquery .Suburb}}%7C{{urlquery .State}}" class="button is-small is-light">Compare</a>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Mobile ranking -->
+        <div class="is-hidden-tablet">
+            {{range .GrowthRows}}
+            <div class="card shadow-sm mb-3">
+                <div class="card-content">
+                    <div class="is-flex is-justify-content-space-between is-align-items-flex-start mb-2">
+                        <div class="is-flex-grow-1 break-words">
+                            <p class="heading has-text-grey mb-1">#{{.Rank}}</p>
+                            <a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="title is-5 has-text-primary">{{.Suburb}}</a>
+                            <span class="tag is-dark is-light">{{.State}}</span>
+                        </div>
+                        <div class="has-text-right is-flex-shrink-0 ml-3 nowrap">
+                            <p class="title is-4 {{if lt .ChangePct 0.0}}has-text-danger{{else}}has-text-success{{end}} mb-0">{{printf "%+.1f%%" .ChangePct}}</p>
+                            <p class="is-size-7 has-text-grey">{{rangeLabel $.GrowthRange}} change</p>
+                        </div>
+                    </div>
+                    <p class="is-size-7 has-text-grey mb-2">${{formatPrice .AvgPrice}} average sale &bull; {{.SalesCount}} recorded sales</p>
+                    <div class="is-flex is-justify-content-space-between is-flex-wrap-wrap mb-2">
+                        <p class="is-size-7 mb-1">1y: {{if .Change1y.Valid}}<strong class="{{if lt .Change1y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change1y.Float64}}</strong>{{else}}—{{end}}</p>
+                        <p class="is-size-7 mb-1">5y: {{if .Change5y.Valid}}<strong class="{{if lt .Change5y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change5y.Float64}}</strong>{{else}}—{{end}}</p>
+                        <p class="is-size-7 mb-1">10y: {{if .Change10y.Valid}}<strong class="{{if lt .Change10y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change10y.Float64}}</strong>{{else}}—{{end}}</p>
+                    </div>
+                    <div class="buttons are-small mt-3 mb-0">
+                        <a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="button is-small is-primary is-light">Trends</a>
+                        <a href="/compare?suburbs={{urlquery .Suburb}}%7C{{urlquery .State}}" class="button is-small is-light">Compare</a>
+                    </div>
+                </div>
+            </div>
+            {{end}}
+        </div>
+
+        {{template "searchPager" .}}
+        {{else}}
+        <div class="notification is-warning is-light p-5 has-text-centered">
+            <p class="is-size-5 mb-2"><i class="fa-solid fa-filter mr-2"></i> No suburbs meet this threshold</p>
+            <p class="has-text-grey mb-3">Try a lower minimum-sales threshold or a different period.</p>
+            <a href="/suburbs/growth?range={{.GrowthRange}}&direction={{.GrowthDirection}}&min_sales=10" class="button is-small is-dark">Lower threshold to 10 sales</a>
+        </div>
+        {{end}}
+
+        <div class="message is-light mt-4">
+            <div class="message-body is-size-7 has-text-grey">
+                <strong>About this data:</strong> growth is calculated from recorded settlement prices, comparing the latest 12-month average with the 12-month average ending 1, 5 or 10 years ago. It is nominal and can be affected by changes in the mix of properties sold. Suburbs without sales in either comparison period are excluded. Use the <a href="/compare">suburb comparison</a> page to compare individual markets side by side.
+            </div>
+        </div>
+    </div>
+</section>
+{{end}}

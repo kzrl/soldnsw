@@ -1,0 +1,247 @@
+{{define "title"}}Compare Suburbs - SoldNSW{{end}}
+
+{{define "head"}}
+{{if .CompareSuburbs}}<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>{{end}}
+{{end}}
+
+{{define "content"}}
+<section class="section py-5">
+    <div class="container">
+        <nav class="breadcrumb has-succeeds-separator is-small mb-4" aria-label="breadcrumbs">
+            <ul>
+                <li><a href="/"><i class="fa-solid fa-house mr-1"></i> Home</a></li>
+                <li><a href="/suburbs">Suburbs</a></li>
+                <li class="is-active"><a aria-current="page">Compare</a></li>
+            </ul>
+        </nav>
+
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <h1 class="title is-3 mb-1">
+                        <i class="fa-solid fa-scale-balanced has-text-primary mr-2"></i>
+                        Compare suburbs
+                    </h1>
+                    <p class="subtitle is-6 has-text-grey mb-0">
+                        Side-by-side market KPIs and an overlaid monthly average sale price chart.
+                    </p>
+                </div>
+            </div>
+            <div class="level-right">
+                <div class="buttons mb-0">
+                    <a href="/suburbs/growth" class="button is-small is-success is-light">
+                        <span class="icon"><i class="fa-solid fa-arrow-trend-up"></i></span>
+                        <span>Growth ranking</span>
+                    </a>
+                    <a href="/suburbs" class="button is-small is-light">
+                        <span class="icon"><i class="fa-solid fa-arrow-left"></i></span>
+                        <span>All suburbs</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <form action="/compare" method="GET" class="box p-4 mb-5 compare-form">
+            <div class="field is-grouped is-grouped-multiline mb-0">
+                <div class="control is-expanded">
+                    <label class="label is-small" for="compareSuburbs">Suburbs</label>
+                    <input class="input" id="compareSuburbs" name="suburbs" value="{{.CompareRaw}}" placeholder="SURRY HILLS|NSW, BONDI|NSW" autocomplete="off">
+                    <p class="help">Comma-separated. Add <code>|STATE</code> when the suburb name exists in more than one state. Up to 4 suburbs.</p>
+                </div>
+                <div class="control">
+                    <label class="label is-small" for="compareRange">Range</label>
+                    <div class="select is-fullwidth">
+                        <select id="compareRange" name="range">
+                            <option value="1" {{if eq .CompareRange "1"}}selected{{end}}>1 year</option>
+                            <option value="5" {{if eq .CompareRange "5"}}selected{{end}}>5 years</option>
+                            <option value="10" {{if eq .CompareRange "10"}}selected{{end}}>10 years</option>
+                            <option value="all" {{if eq .CompareRange "all"}}selected{{end}}>All time</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="control">
+                    <label class="label is-small">&nbsp;</label>
+                    <button type="submit" class="button is-primary">
+                        <span class="icon"><i class="fa-solid fa-arrow-right-arrow-left"></i></span>
+                        <span>Compare</span>
+                    </button>
+                </div>
+            </div>
+        </form>
+
+        {{if .CompareLimitReached}}
+        <div class="notification is-warning is-light">
+            <p><i class="fa-solid fa-triangle-exclamation mr-1"></i> Only the first 4 suburbs are compared. Remove one to add another.</p>
+        </div>
+        {{end}}
+
+        {{if .CompareMissing}}
+        <div class="notification is-warning is-light">
+            <p class="has-text-weight-bold mb-1"><i class="fa-solid fa-magnifying-glass mr-1"></i> Some suburbs could not be found</p>
+            <p class="is-size-7">{{range $i, $m := .CompareMissing}}{{if $i}}, {{end}}{{$m}}{{end}}. Check the spelling or add the state, for example <code>SPRINGVALE|VIC</code>.</p>
+        </div>
+        {{end}}
+
+        {{if .CompareSuburbs}}
+        <div class="card shadow-sm mb-5">
+            <header class="card-header has-background-white-ter">
+                <p class="card-header-title">
+                    <i class="fa-solid fa-table-columns mr-2 has-text-primary"></i> Market comparison
+                    <span class="tag is-light ml-2">{{rangeLabel .CompareRange}}</span>
+                </p>
+            </header>
+            <div class="card-content p-0">
+                <div class="table-container mb-0">
+                    <table class="table is-fullwidth is-striped is-hoverable compare-table mb-0">
+                        <thead>
+                            <tr class="has-background-light">
+                                <th scope="col">Metric</th>
+                                {{range .CompareSuburbs}}
+                                <th scope="col" class="has-text-right">
+                                    <a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-weight-bold">{{.Suburb}}</a>
+                                    <span class="tag is-dark is-light ml-1">{{.State}}</span>
+                                </th>
+                                {{end}}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <th scope="row">Median sale</th>
+                                {{range .CompareSuburbs}}
+                                <td class="has-text-right has-text-weight-bold has-text-primary">{{if gt .RangeSales 0}}${{formatPrice .MedianPrice}}{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>
+                                {{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">Average sale</th>
+                                {{range .CompareSuburbs}}
+                                <td class="has-text-right">{{if gt .RangeSales 0}}${{formatPrice .RangeAvgPrice}}{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>
+                                {{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">Median land value</th>
+                                {{range .CompareSuburbs}}
+                                <td class="has-text-right">{{if gt .MedianPricePerSqm 0}}${{formatPrice .MedianPricePerSqm}}/m²{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>
+                                {{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">Sales in range</th>
+                                {{range .CompareSuburbs}}<td class="has-text-right">{{.RangeSales}}</td>{{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">All-time average</th>
+                                {{range .CompareSuburbs}}<td class="has-text-right">${{formatPrice .AvgPrice}}</td>{{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">All-time sales</th>
+                                {{range .CompareSuburbs}}<td class="has-text-right">{{.SalesCount}}</td>{{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">Properties</th>
+                                {{range .CompareSuburbs}}<td class="has-text-right">{{.PropertyCount}}</td>{{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">1-year change</th>
+                                {{range .CompareSuburbs}}<td class="has-text-right">{{if .Change1y.Valid}}<span class="{{if lt .Change1y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change1y.Float64}}</span>{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>{{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">5-year change</th>
+                                {{range .CompareSuburbs}}<td class="has-text-right">{{if .Change5y.Valid}}<span class="{{if lt .Change5y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change5y.Float64}}</span>{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>{{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">10-year change</th>
+                                {{range .CompareSuburbs}}<td class="has-text-right">{{if .Change10y.Valid}}<span class="{{if lt .Change10y.Float64 0.0}}has-text-danger{{else}}has-text-success{{end}}">{{printf "%+.1f%%" .Change10y.Float64}}</span>{{else}}<span class="has-text-grey-light">—</span>{{end}}</td>{{end}}
+                            </tr>
+                            <tr>
+                                <th scope="row">Actions</th>
+                                {{range .CompareSuburbs}}
+                                <td class="has-text-right nowrap">
+                                    <a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="button is-small is-primary is-light">Trends</a>
+                                </td>
+                                {{end}}
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm mb-5">
+            <header class="card-header has-background-white-ter">
+                <p class="card-header-title">
+                    <i class="fa-solid fa-chart-line mr-2 has-text-primary"></i> Monthly average sale price
+                </p>
+            </header>
+            <div class="card-content">
+                <div class="chart-container">
+                    <canvas id="compareChart"></canvas>
+                </div>
+                <p class="is-size-7 has-text-grey mt-3">
+                    Monthly average across all recorded sales in each suburb. Gaps mean no sale was recorded that month.
+                </p>
+            </div>
+        </div>
+        {{else if eq .CompareRaw ""}}
+        <div class="notification is-info is-light p-5">
+            <p class="has-text-weight-bold mb-1"><i class="fa-solid fa-circle-info mr-2"></i> Choose suburbs to compare</p>
+            <p class="mb-3">Enter two to four suburbs above, or start from a suburb page and use its <strong>Compare</strong> button.</p>
+            <div class="buttons are-small">
+                <a href="/compare?suburbs=SURRY+HILLS%7CNSW,BONDI%7CNSW" class="button is-small is-light">Surry Hills vs Bondi</a>
+                <a href="/compare?suburbs=CHATSWOOD%7CNSW,PARRAMATTA%7CNSW" class="button is-small is-light">Chatswood vs Parramatta</a>
+            </div>
+        </div>
+        {{else}}
+        <div class="notification is-warning is-light p-5 has-text-centered">
+            <p class="is-size-5 mb-2"><i class="fa-solid fa-triangle-exclamation mr-2"></i> Not enough suburbs to compare</p>
+            <p class="has-text-grey mb-3">Add at least one more suburb above.</p>
+            <a href="/suburbs" class="button is-small is-dark">Browse suburbs</a>
+        </div>
+        {{end}}
+
+        <div class="message is-light mt-4">
+            <div class="message-body is-size-7 has-text-grey">
+                <strong>About this data:</strong> KPIs in the selected range use recorded settlement prices. Median land value only includes house sales with a recorded land area. Change figures compare the latest 12-month average with the 12-month average ending 1, 5 or 10 years ago and are nominal, not adjusted for property mix.
+            </div>
+        </div>
+    </div>
+</section>
+
+{{if .CompareSuburbs}}
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    var canvas = document.getElementById('compareChart');
+    if (!canvas) return;
+
+    new Chart(canvas, {
+        type: 'line',
+        data: {{.CompareChartJSON}},
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'bottom' },
+                tooltip: {
+                    callbacks: {
+                        label: function (context) {
+                            if (context.parsed.y === null) return context.dataset.label + ': —';
+                            return context.dataset.label + ': $' + Number(context.parsed.y).toLocaleString();
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    ticks: {
+                        callback: function (value) {
+                            return '$' + (value / 1000).toFixed(0) + 'k';
+                        }
+                    }
+                },
+                x: { ticks: { maxTicksLimit: 12 } }
+            }
+        }
+    });
+});
+</script>
+{{end}}
+{{end}}

@@ -101,6 +101,20 @@ type StreetStat struct {
 	UpdatedAt     string
 }
 
+type SuburbLossStat struct {
+	Suburb             string
+	State              string
+	Period             string
+	Resales            int64
+	Losses             int64
+	TotalLoss          int64
+	AverageLoss        int64
+	AverageLossPercent float64
+	LargestLoss        int64
+	FlaggedLosses      int64
+	UpdatedAt          string
+}
+
 type SuburbStat struct {
 	Suburb        string
 	State         string

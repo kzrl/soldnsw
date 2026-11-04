@@ -42,6 +42,27 @@ CREATE TABLE IF NOT EXISTS suburb_stats (
     PRIMARY KEY (suburb, state)
 ) STRICT;
 
+-- Materialised loss rankings. Rows with zero losses are kept so the same
+-- table can serve summaries and incremental updates.
+CREATE TABLE IF NOT EXISTS suburb_loss_stats (
+    suburb TEXT NOT NULL,
+    state TEXT NOT NULL,
+    period TEXT NOT NULL,
+    resales INTEGER NOT NULL DEFAULT 0,
+    losses INTEGER NOT NULL DEFAULT 0,
+    total_loss INTEGER NOT NULL DEFAULT 0,
+    average_loss INTEGER NOT NULL DEFAULT 0,
+    average_loss_percent REAL NOT NULL DEFAULT 0,
+    largest_loss INTEGER NOT NULL DEFAULT 0,
+    flagged_losses INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (suburb, state, period)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_suburb_loss_stats_rank
+    ON suburb_loss_stats(period, losses DESC, total_loss DESC);
+
+
 -- street_stats and postcode_stats are materialised for fast autocomplete.
 CREATE TABLE IF NOT EXISTS street_stats (
     street_name TEXT NOT NULL,

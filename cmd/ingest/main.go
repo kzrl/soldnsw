@@ -366,6 +366,9 @@ func main() {
 	if err := database.RefreshPostcodeStats(ctx, db); err != nil {
 		log.Printf("Warning: could not rebuild postcode statistics: %v", err)
 	}
+	if err := database.RefreshSuburbLossStats(ctx, db); err != nil {
+		log.Printf("Warning: could not rebuild suburb loss statistics: %v", err)
+	}
 	if err := database.RebuildAddressSearch(ctx, db); err != nil {
 		log.Printf("Warning: could not rebuild address search index: %v", err)
 	}

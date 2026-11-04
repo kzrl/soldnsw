@@ -216,6 +216,10 @@ func (imp *Importer) Run(ctx context.Context) (*ImportStats, error) {
 		if err := database.RefreshPostcodeStats(ctx, imp.db); err != nil {
 			fmt.Printf("[!] Postcode statistics refresh failed: %v\n", err)
 		}
+		fmt.Println("[*] Rebuilding suburb loss rankings...")
+		if err := database.RefreshSuburbLossStats(ctx, imp.db); err != nil {
+			fmt.Printf("[!] Suburb loss statistics refresh failed: %v\n", err)
+		}
 		fmt.Println("[*] Rebuilding address search index...")
 		if err := database.RebuildAddressSearch(ctx, imp.db); err != nil {
 			fmt.Printf("[!] Address search rebuild failed: %v\n", err)

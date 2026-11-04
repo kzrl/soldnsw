@@ -1,0 +1,194 @@
+{{define "title"}}Suburbs with the Most Losses - SoldNSW{{end}}
+
+{{define "content"}}
+<section class="section py-5">
+    <div class="container">
+        <nav class="breadcrumb has-succeeds-separator is-small mb-4" aria-label="breadcrumbs">
+            <ul>
+                <li><a href="/"><i class="fa-solid fa-house mr-1"></i> Home</a></li>
+                <li><a href="/suburbs">Suburbs</a></li>
+                <li class="is-active"><a aria-current="page">Most losses</a></li>
+            </ul>
+        </nav>
+
+        <div class="level mb-4">
+            <div class="level-left">
+                <div>
+                    <h1 class="title is-3 mb-1">
+                        <i class="fa-solid fa-arrow-trend-down has-text-danger mr-2"></i>
+                        Suburbs with the most losses
+                    </h1>
+                    <p class="subtitle is-6 has-text-grey mb-0">
+                        Latest recorded sale below the previous recorded sale over the last 2 years.
+                    </p>
+                    {{if .SuburbLossSummary.UpdatedAt}}
+                    <p class="is-size-7 has-text-grey mt-1">Analytics updated {{formatDateTime .SuburbLossSummary.UpdatedAt}}</p>
+                    {{end}}
+                </div>
+            </div>
+            <div class="level-right">
+                <a href="/suburbs" class="button is-small is-light">
+                    <span class="icon"><i class="fa-solid fa-arrow-left"></i></span>
+                    <span>All suburbs</span>
+                </a>
+            </div>
+        </div>
+
+        {{if .SearchError}}
+        <div class="notification is-danger is-light">
+            <p><i class="fa-solid fa-triangle-exclamation mr-1"></i> {{.SearchError}}</p>
+        </div>
+        {{end}}
+
+        {{if eq .StatsStatus "building"}}
+        <div class="notification is-info is-light">
+            <p><i class="fa-solid fa-gears mr-1"></i> Loss rankings are being prepared. This can take a few minutes on first startup.</p>
+        </div>
+        {{else if eq .StatsStatus "failed"}}
+        <div class="notification is-danger is-light">
+            <p><i class="fa-solid fa-triangle-exclamation mr-1"></i> Loss rankings could not be built. Please try again later or contact the administrator.</p>
+        </div>
+        {{end}}
+
+        {{if .SuburbLossSummary.UpdatedAt}}
+        <div class="columns is-multiline mb-5">
+            <div class="column is-12-mobile is-4-tablet">
+                <div class="card p-4 has-background-danger-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-house-circle-xmark mr-1"></i> Loss-making resales</p>
+                    <p class="title is-3 has-text-danger mb-0">{{formatCount .SuburbLossSummary.Losses}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Across {{.SuburbLossSummary.SuburbsAffected}} suburbs</p>
+                </div>
+            </div>
+            <div class="column is-12-mobile is-4-tablet">
+                <div class="card p-4 has-background-warning-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-percent mr-1"></i> Average loss</p>
+                    <p class="title is-3 has-text-warning-dark mb-0">{{printf "%.1f%%" .SuburbLossSummary.AverageLossPercent}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Average price drop per loss-making resale</p>
+                </div>
+            </div>
+            <div class="column is-12-mobile is-4-tablet">
+                <div class="card p-4 has-background-info-light has-text-centered shadow-sm" style="border-radius: 8px;">
+                    <p class="heading has-text-grey-dark"><i class="fa-solid fa-city mr-1"></i> Suburbs affected</p>
+                    <p class="title is-3 has-text-info mb-0">{{.SuburbLossSummary.SuburbsAffected}}</p>
+                    <p class="is-size-7 has-text-grey mt-1">Of {{.SuburbLossSummary.Resales}} resales in the period</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="level mb-3" id="rankings">
+            <div class="level-left">
+                <div class="buttons has-addons mb-0">
+                    <a href="/suburbs/most-losses?sort=losses" class="button is-small {{if eq .LossRankingSort "losses"}}is-primary{{else}}is-light{{end}}">Most losses</a>
+                    <a href="/suburbs/most-losses?sort=rate" class="button is-small {{if eq .LossRankingSort "rate"}}is-primary{{else}}is-light{{end}}">Highest loss rate</a>
+                    <a href="/suburbs/most-losses?sort=average_loss" class="button is-small {{if eq .LossRankingSort "average_loss"}}is-primary{{else}}is-light{{end}}">Largest average loss</a>
+                </div>
+            </div>
+        </div>
+        <p class="is-size-7 has-text-grey mb-4">
+            <i class="fa-solid fa-circle-info mr-1"></i>
+            {{if eq .LossRankingSort "rate"}}Loss-rate rankings include suburbs with at least {{.LossRateMinResales}} resales.{{else if eq .LossRankingSort "average_loss"}}Average-loss rankings include suburbs with at least {{.LossAverageMinLosses}} loss-making resales.{{else}}Ranked by the number of loss-making resales in the last 2 years.{{end}}
+            {{if gt .SuburbLossSummary.FlaggedLosses 0}}{{.SuburbLossSummary.FlaggedLosses}} resales are flagged as possible data issues (>80% drop) and remain included, matching the suburb losses detail.{{end}}
+        </p>
+
+        {{if .SuburbLossStats}}
+        <!-- Desktop ranking -->
+        <div class="is-hidden-mobile">
+            <div class="table-container">
+                <table class="table is-fullwidth is-striped is-hoverable losses-table mb-0">
+                    <thead>
+                        <tr class="has-background-light">
+                            <th scope="col">Rank</th>
+                            <th scope="col">Suburb</th>
+                            <th scope="col">State</th>
+                            <th scope="col" class="has-text-right">Losses</th>
+                            <th scope="col" class="has-text-right">Resales</th>
+                            <th scope="col" class="has-text-right" title="Share of resales sold below the previous price">Loss rate</th>
+                            <th scope="col" class="has-text-right" title="Average price drop per loss-making resale">Avg loss %</th>
+                            <th scope="col" class="has-text-right">Largest loss</th>
+                            <th scope="col" class="has-text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .SuburbLossStats}}
+                        <tr>
+                            <td class="has-text-grey">{{.Rank}}</td>
+                            <td><a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="has-text-weight-bold">{{.Suburb}}</a></td>
+                            <td><span class="tag is-dark is-light">{{.State}}</span></td>
+                            <td class="has-text-right has-text-weight-bold has-text-danger">{{.Losses}}</td>
+                            <td class="has-text-right">{{.Resales}}</td>
+                            <td class="has-text-right">{{printf "%.1f%%" .LossRate}}</td>
+                            <td class="has-text-right has-text-danger">{{printf "%.1f%%" .AverageLossPercent}}</td>
+                            <td class="has-text-right">${{absPrice .LargestLoss}}</td>
+                            <td class="has-text-right">
+                                <a href="/suburbs/losses?suburb={{urlquery .Suburb}}&state={{urlquery .State}}&range=2&sort=amount" class="button is-small is-danger is-light">View losses</a>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Mobile ranking -->
+        <div class="is-hidden-tablet">
+            {{range .SuburbLossStats}}
+            <div class="card shadow-sm mb-3">
+                <div class="card-content">
+                    <div class="is-flex is-justify-content-space-between is-align-items-flex-start mb-2">
+                        <div class="is-flex-grow-1 break-words">
+                            <p class="heading has-text-grey mb-1">#{{.Rank}}</p>
+                            <a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="title is-5 has-text-primary">{{.Suburb}}</a>
+                            <span class="tag is-dark is-light">{{.State}}</span>
+                        </div>
+                        <div class="has-text-right is-flex-shrink-0 ml-3 nowrap">
+                            <p class="title is-4 has-text-danger mb-0">{{.Losses}}</p>
+                            <p class="is-size-7 has-text-grey">losses</p>
+                        </div>
+                    </div>
+                    <p class="is-size-7 has-text-grey mb-2">{{.Losses}} of {{.Resales}} resales ({{printf "%.1f%%" .LossRate}} loss rate)</p>
+                    <div class="is-flex is-justify-content-space-between is-flex-wrap-wrap">
+                        <p class="is-size-7 mb-1"><strong class="has-text-danger">{{printf "%.1f%%" .AverageLossPercent}}</strong> average price drop</p>
+                        <p class="is-size-7 mb-1"><strong>${{absPrice .LargestLoss}}</strong> largest</p>
+                    </div>
+                    <div class="buttons are-small mt-3 mb-0">
+                        <a href="/suburbs/losses?suburb={{urlquery .Suburb}}&state={{urlquery .State}}&range=2&sort=amount" class="button is-small is-danger is-light">View losses</a>
+                        <a href="/suburbs?suburb={{urlquery .Suburb}}&state={{urlquery .State}}" class="button is-small is-light">Suburb trends</a>
+                    </div>
+                </div>
+            </div>
+            {{end}}
+        </div>
+
+        {{template "searchPager" .}}
+        {{else if and (or (eq .LossRankingSort "rate") (eq .LossRankingSort "average_loss")) (gt .SuburbLossSummary.Losses 0)}}
+        <div class="notification is-warning is-light p-5 has-text-centered">
+            <p class="is-size-5 mb-2"><i class="fa-solid fa-filter mr-2"></i> No suburbs meet this ranking threshold</p>
+            {{if eq .LossRankingSort "rate"}}
+            <p class="has-text-grey mb-3">Loss-rate rankings only include suburbs with at least {{.LossRateMinResales}} resales in the last 2 years.</p>
+            {{else}}
+            <p class="has-text-grey mb-3">Average-loss rankings only include suburbs with at least {{.LossAverageMinLosses}} loss-making resales in the last 2 years.</p>
+            {{end}}
+            <a href="/suburbs/most-losses?sort=losses" class="button is-small is-dark">Rank by most losses instead</a>
+        </div>
+        {{else}}
+        <div class="notification is-warning is-light p-5 has-text-centered">
+            <p class="is-size-5 mb-2"><i class="fa-solid fa-triangle-exclamation mr-2"></i> No loss-making resales found</p>
+            <p class="has-text-grey mb-3">There are no recorded resales below the previous sale in the last 2 years.</p>
+            <a href="/suburbs" class="button is-small is-dark">Browse suburbs</a>
+        </div>
+        {{end}}
+
+        <div class="message is-light mt-4">
+            <div class="message-body is-size-7 has-text-grey">
+                <strong>About this data:</strong> losses are nominal and based on recorded settlement history. Same-day resales are excluded. A loss is the latest recorded sale being below the immediately preceding recorded sale for the same property. Records are linked by property ID, or by identical address when IDs differ; changed property IDs, missing sales, partial titles, related-party transfers or data errors can affect results. Rows with a drop of more than 80% are flagged as possible data issues on the suburb losses page.
+            </div>
+        </div>
+        {{else if ne .StatsStatus "failed"}}
+        <div class="notification is-info is-light">
+            <p class="has-text-weight-bold mb-1">Loss rankings are being prepared.</p>
+            <p class="is-size-7">The table is built in the background the first time the statistics are generated. Refresh this page in a few minutes.</p>
+        </div>
+        {{end}}
+    </div>
+</section>
+{{end}}

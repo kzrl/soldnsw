@@ -39,6 +39,7 @@
                         {{if gt .PostcodeSummary.SalesCount 0}}${{formatPrice .PostcodeSummary.MedianPrice}}{{else}}—{{end}}
                     </p>
                     <p class="is-size-7 has-text-grey mt-1">Average: {{if gt .PostcodeSummary.SalesCount 0}}${{formatPrice .PostcodeSummary.AvgPrice}}{{else}}—{{end}}</p>
+                    {{if gt .PostcodeSummary.MedianPricePerSqm 0}}<p class="is-size-7 has-text-grey mt-1">Land value: ${{formatPrice .PostcodeSummary.MedianPricePerSqm}}/m² ({{.PostcodeSummary.SqmSampleCount}} sales)</p>{{end}}
                 </div>
             </div>
             <div class="column is-12-mobile is-6-tablet is-3-desktop">
@@ -109,7 +110,7 @@
 
         {{template "resultFilters" .}}
 
-        <div class="level mb-3">
+        <div class="level mb-3" id="properties">
             <div class="level-left">
                 <div>
                     <h2 class="title is-5 mb-1">Properties in {{.QueryPostcode}}</h2>

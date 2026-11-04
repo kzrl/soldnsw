@@ -46,7 +46,7 @@
                             {{end}}
                         </form>
 
-                        <details class="mt-3" {{if or .QuerySuburb .QueryStreet .QueryNumber .QueryPostcode}}open{{end}}>
+                        <details class="mt-3" id="advancedSearch" {{if or .QuerySuburb .QueryStreet .QueryNumber .QueryPostcode}}data-open-on-desktop="true"{{end}}>
                             <summary class="is-size-7 has-text-grey">Advanced search by street, suburb, number or postcode</summary>
                             <form action="/properties" method="GET" class="mt-3">
                                 <div class="columns is-variable is-2 is-multiline">
@@ -267,6 +267,7 @@
                     <p class="heading has-text-grey-dark"><i class="fa-solid fa-calculator mr-1"></i> Median sale price</p>
                     <p class="title is-4 has-text-success mb-0">{{if gt .StreetSummary.SalesCount 0}}${{formatPrice .StreetSummary.MedianPrice}}{{else}}—{{end}}</p>
                     <p class="is-size-7 has-text-grey mt-1">Average: {{if gt .StreetSummary.SalesCount 0}}${{formatPrice .StreetSummary.AvgPrice}}{{else}}—{{end}}</p>
+                    {{if gt .StreetSummary.MedianPricePerSqm 0}}<p class="is-size-7 has-text-grey mt-1">Land value: ${{formatPrice .StreetSummary.MedianPricePerSqm}}/m² ({{.StreetSummary.SqmSampleCount}} sales)</p>{{end}}
                 </div>
             </div>
             <div class="column is-12-mobile is-6-tablet is-3-desktop">
@@ -476,6 +477,11 @@
 {{end}}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
+    const advancedSearch = document.getElementById("advancedSearch");
+    if (advancedSearch && advancedSearch.dataset.openOnDesktop === "true" && window.matchMedia("(min-width: 769px)").matches) {
+        advancedSearch.open = true;
+    }
+
     const input = document.getElementById("addressSearch");
     const box = document.getElementById("addressSuggestions");
     if (!input || !box) return;

@@ -82,6 +82,9 @@ func main() {
 		if err := database.RefreshPostcodeStats(ctx, db); err != nil {
 			log.Fatalf("Postcode statistics rebuild failed: %v", err)
 		}
+		if err := database.RefreshSuburbLossStats(ctx, db); err != nil {
+			log.Fatalf("Suburb loss statistics rebuild failed: %v", err)
+		}
 	}
 
 	if missing, err := database.MissingSearchIndexes(ctx, db); err != nil {

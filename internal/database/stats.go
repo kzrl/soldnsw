@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 const insertSuburbStats = `
@@ -186,6 +187,9 @@ func EnsureSuburbStatsSchema(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("read suburb_stats columns: %w", err)
 	}
 	rows.Close()
+	if err := ensureSuburbLossStatsSchema(ctx, db); err != nil {
+		return err
+	}
 	if has1y && has5y && has10y {
 		return nil
 	}
@@ -194,6 +198,44 @@ func EnsureSuburbStatsSchema(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, SchemaSQL); err != nil {
 		return fmt.Errorf("recreate suburb_stats: %w", err)
+	}
+	return nil
+}
+
+// ensureSuburbLossStatsSchema adds the average-loss percentage column to an
+// existing ranking table. Rows are cleared so the background builder can
+// repopulate the new metric with correct values.
+func ensureSuburbLossStatsSchema(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info(suburb_loss_stats)")
+	if err != nil {
+		return fmt.Errorf("inspect suburb_loss_stats: %w", err)
+	}
+	hasAverageLossPercent := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("read suburb_loss_stats columns: %w", err)
+		}
+		if name == "average_loss_percent" {
+			hasAverageLossPercent = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read suburb_loss_stats columns: %w", err)
+	}
+	rows.Close()
+	if hasAverageLossPercent {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, "ALTER TABLE suburb_loss_stats ADD COLUMN average_loss_percent REAL NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("add suburb_loss_stats.average_loss_percent: %w", err)
+	}
+	if _, err := db.ExecContext(ctx, "DELETE FROM suburb_loss_stats"); err != nil {
+		return fmt.Errorf("clear suburb loss stats after schema upgrade: %w", err)
 	}
 	return nil
 }
@@ -217,10 +259,169 @@ func RefreshSuburbStats(ctx context.Context, db *sql.DB) error {
 	return tx.Commit()
 }
 
+const suburbLossPeriod = "2y"
+
+const insertSuburbLossStats = `
+INSERT INTO suburb_loss_stats (
+    suburb, state, period, resales, losses, total_loss, average_loss,
+    average_loss_percent, largest_loss, flagged_losses, updated_at
+)
+WITH ordered AS (
+    SELECT
+        cs.canonical_pid,
+        cs.suburb,
+        cs.state,
+        cs.sale_id,
+        cs.settlement_date,
+        cs.sale_price,
+        LAG(cs.sale_price) OVER w AS previous_price,
+        LAG(cs.settlement_date) OVER w AS previous_date,
+        ROW_NUMBER() OVER (
+            PARTITION BY cs.canonical_pid
+            ORDER BY cs.settlement_date DESC, cs.sale_id DESC
+        ) AS rn
+    FROM canonical_sales cs
+    WINDOW w AS (
+        PARTITION BY cs.canonical_pid
+        ORDER BY cs.settlement_date ASC, cs.sale_id ASC
+    )
+),
+candidates AS (
+    SELECT *
+    FROM ordered
+    WHERE rn = 1
+      AND previous_price IS NOT NULL
+      AND previous_date < settlement_date
+      AND settlement_date >= ?1
+),
+grouped AS (
+    SELECT
+        suburb,
+        state,
+        COUNT(*) AS resales,
+        COUNT(CASE WHEN sale_price < previous_price THEN 1 END) AS losses,
+        CAST(COALESCE(SUM(CASE WHEN sale_price < previous_price
+            THEN previous_price - sale_price ELSE 0 END), 0) AS INTEGER) AS total_loss,
+        CAST(COALESCE(AVG(CASE WHEN sale_price < previous_price
+            THEN previous_price - sale_price END), 0) AS INTEGER) AS average_loss,
+        CAST(COALESCE(AVG(CASE WHEN sale_price < previous_price
+            THEN (previous_price - sale_price) * 100.0 / NULLIF(previous_price, 0)
+            END), 0) AS REAL) AS average_loss_percent,
+        CAST(COALESCE(MAX(CASE WHEN sale_price < previous_price
+            THEN previous_price - sale_price END), 0) AS INTEGER) AS largest_loss,
+        COUNT(CASE WHEN sale_price < previous_price
+            AND previous_price > 0
+            AND (sale_price - previous_price) * 100.0 / previous_price < -80
+            THEN 1 END) AS flagged_losses
+    FROM candidates
+    GROUP BY suburb, state
+)
+SELECT
+    suburb, state, '2y', resales, losses, total_loss, average_loss,
+    average_loss_percent, largest_loss, flagged_losses, CURRENT_TIMESTAMP
+FROM grouped`
+
+const refreshOneSuburbLossStats = `
+INSERT INTO suburb_loss_stats (
+    suburb, state, period, resales, losses, total_loss, average_loss,
+    average_loss_percent, largest_loss, flagged_losses, updated_at
+)
+WITH ordered AS (
+    SELECT
+        cs.canonical_pid,
+        cs.suburb,
+        cs.state,
+        cs.sale_id,
+        cs.settlement_date,
+        cs.sale_price,
+        LAG(cs.sale_price) OVER w AS previous_price,
+        LAG(cs.settlement_date) OVER w AS previous_date,
+        ROW_NUMBER() OVER (
+            PARTITION BY cs.canonical_pid
+            ORDER BY cs.settlement_date DESC, cs.sale_id DESC
+        ) AS rn
+    FROM canonical_sales cs
+    WHERE cs.suburb = UPPER(?1) AND cs.state = UPPER(?2)
+    WINDOW w AS (
+        PARTITION BY cs.canonical_pid
+        ORDER BY cs.settlement_date ASC, cs.sale_id ASC
+    )
+),
+candidates AS (
+    SELECT *
+    FROM ordered
+    WHERE rn = 1
+      AND previous_price IS NOT NULL
+      AND previous_date < settlement_date
+      AND settlement_date >= ?3
+),
+aggregated AS (
+    SELECT
+        COUNT(*) AS resales,
+        COUNT(CASE WHEN sale_price < previous_price THEN 1 END) AS losses,
+        CAST(COALESCE(SUM(CASE WHEN sale_price < previous_price
+            THEN previous_price - sale_price ELSE 0 END), 0) AS INTEGER) AS total_loss,
+        CAST(COALESCE(AVG(CASE WHEN sale_price < previous_price
+            THEN previous_price - sale_price END), 0) AS INTEGER) AS average_loss,
+        CAST(COALESCE(AVG(CASE WHEN sale_price < previous_price
+            THEN (previous_price - sale_price) * 100.0 / NULLIF(previous_price, 0)
+            END), 0) AS REAL) AS average_loss_percent,
+        CAST(COALESCE(MAX(CASE WHEN sale_price < previous_price
+            THEN previous_price - sale_price END), 0) AS INTEGER) AS largest_loss,
+        COUNT(CASE WHEN sale_price < previous_price
+            AND previous_price > 0
+            AND (sale_price - previous_price) * 100.0 / previous_price < -80
+            THEN 1 END) AS flagged_losses
+    FROM candidates
+)
+SELECT
+    UPPER(?1), UPPER(?2), '2y', resales, losses, total_loss, average_loss,
+    average_loss_percent, largest_loss, flagged_losses, CURRENT_TIMESTAMP
+FROM aggregated
+WHERE true
+ON CONFLICT(suburb, state, period) DO UPDATE SET
+    resales = excluded.resales,
+    losses = excluded.losses,
+    total_loss = excluded.total_loss,
+    average_loss = excluded.average_loss,
+    average_loss_percent = excluded.average_loss_percent,
+    largest_loss = excluded.largest_loss,
+    flagged_losses = excluded.flagged_losses,
+    updated_at = CURRENT_TIMESTAMP`
+
 // RefreshSuburbStat updates one suburb after a new sale is recorded.
 func RefreshSuburbStat(ctx context.Context, db *sql.DB, suburb, state string) error {
 	if _, err := db.ExecContext(ctx, refreshOneSuburbStats, suburb, state); err != nil {
 		return fmt.Errorf("refresh suburb stat %s/%s: %w", suburb, state, err)
+	}
+	return nil
+}
+
+// RefreshSuburbLossStats rebuilds the two-year loss ranking table. It runs a
+// window over the whole canonical sale set, so callers should use it in the
+// background or at the end of a bulk import.
+func RefreshSuburbLossStats(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin suburb loss stats refresh: %w", err)
+	}
+	defer tx.Rollback()
+
+	cutoff := time.Now().AddDate(-2, 0, 0).Format("2006-01-02")
+	if _, err := tx.ExecContext(ctx, "DELETE FROM suburb_loss_stats WHERE period = ?", suburbLossPeriod); err != nil {
+		return fmt.Errorf("clear suburb loss stats: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, insertSuburbLossStats, cutoff); err != nil {
+		return fmt.Errorf("rebuild suburb loss stats: %w", err)
+	}
+	return tx.Commit()
+}
+
+// RefreshSuburbLossStat updates one suburb's ranking row after a new sale.
+func RefreshSuburbLossStat(ctx context.Context, db *sql.DB, suburb, state string) error {
+	cutoff := time.Now().AddDate(-2, 0, 0).Format("2006-01-02")
+	if _, err := db.ExecContext(ctx, refreshOneSuburbLossStats, suburb, state, cutoff); err != nil {
+		return fmt.Errorf("refresh suburb loss stat %s/%s: %w", suburb, state, err)
 	}
 	return nil
 }
